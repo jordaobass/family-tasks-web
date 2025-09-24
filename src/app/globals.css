@@ -17,5 +17,95 @@
 body {
   color: var(--foreground);
   background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Custom animations */
+@keyframes fadeIn {
+  from { 
+    opacity: 0; 
+    transform: translateY(-20px); 
+  }
+  to { 
+    opacity: 1; 
+    transform: translateY(0); 
+  }
+}
+
+@keyframes slideIn {
+  from { 
+    opacity: 0; 
+    transform: translateX(-20px); 
+  }
+  to { 
+    opacity: 1; 
+    transform: translateX(0); 
+  }
+}
+
+@keyframes celebrate {
+  0% { 
+    transform: translate(-50%, -50%) scale(0) rotate(0deg); 
+  }
+  50% { 
+    transform: translate(-50%, -50%) scale(1.5) rotate(180deg); 
+  }
+  100% { 
+    transform: translate(-50%, -50%) scale(0) rotate(360deg); 
+  }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.5s ease;
+}
+
+.animate-slideIn {
+  animation: slideIn 0.3s ease;
+}
+
+.animate-celebrate {
+  animation: celebrate 1s ease;
+}
+
+.animate-pulse {
+  animation: pulse 2s infinite;
+}
+
+/* Drag and drop styles */
+.drop-zone.drag-over {
+  background: rgba(34, 197, 94, 0.1) !important;
+  border-color: rgba(34, 197, 94, 0.3) !important;
+  border-style: solid !important;
+}
+
+.task-card.dragging {
+  opacity: 0.5;
+  transform: scale(1.05);
+  z-index: 1000;
+}
+
+/* Touch optimizations */
+.task-card {
+  touch-action: none;
+}
+
+/* Prevent scroll on drag */
+body.dragging {
+  overflow: hidden;
+}
+
+/* Line clamp utility */
+.line-clamp-2 {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
