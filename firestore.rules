@@ -1,0 +1,49 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // REGRAS PERMISSIVAS PARA DESENVOLVIMENTO
+    // TODO: Restringir em produção
+
+    // Permitir acesso total para desenvolvimento
+    match /{document=**} {
+      allow read, write, create, update, delete: if true;
+    }
+
+    // Regras específicas para cada coleção (caso precise de mais controle)
+    match /families/{familyId} {
+      allow read, write, create, update, delete: if true;
+
+      // Sub-coleções da família
+      match /tasks/{taskId} {
+        allow read, write, create, update, delete: if true;
+      }
+
+      match /task_templates/{templateId} {
+        allow read, write, create, update, delete: if true;
+      }
+
+      match /task_instances/{instanceId} {
+        allow read, write, create, update, delete: if true;
+      }
+
+      match /daily_checks/{checkId} {
+        allow read, write, create, update, delete: if true;
+      }
+
+      match /members/{memberId} {
+        allow read, write, create, update, delete: if true;
+      }
+    }
+
+    // Coleção de usuários
+    match /users/{userId} {
+      allow read, write, create, update, delete: if true;
+    }
+
+    // Coleção de teste
+    match /test/{testId} {
+      allow read, write, create, update, delete: if true;
+    }
+  }
+}

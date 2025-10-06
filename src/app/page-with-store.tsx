@@ -31,6 +31,13 @@ export default function Home() {
     show_warning
   } = useTaskStore()
 
+  // Initialize default tasks on first load
+  useEffect(() => {
+    if (pending_tasks.length === 0 && completed_tasks.length === 0) {
+      initialize_default_tasks()
+    }
+  }, [pending_tasks.length, completed_tasks.length, initialize_default_tasks])
+
   // Show loading state during hydration
   if (!is_hydrated) {
     return (
@@ -42,13 +49,6 @@ export default function Home() {
       </div>
     )
   }
-
-  // Initialize default tasks on first load
-  useEffect(() => {
-    if (pending_tasks.length === 0 && completed_tasks.length === 0) {
-      initialize_default_tasks()
-    }
-  }, [pending_tasks.length, completed_tasks.length, initialize_default_tasks])
 
   // Get current date
   const get_formatted_date = () => {

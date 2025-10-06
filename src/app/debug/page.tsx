@@ -1,5 +1,7 @@
 'use client'
 
+import { DEFAULT_USERS } from '@/config/constants'
+
 export default function Debug() {
   return (
     <div className="p-8">
@@ -8,30 +10,11 @@ export default function Debug() {
         <div>✅ React funcionando</div>
         <div>✅ Next.js funcionando</div>
         <div>✅ Tailwind funcionando</div>
-        
+
         <div className="mt-8">
           <h2 className="text-lg font-semibold mb-2">Testando imports:</h2>
-          <div>
-            {(() => {
-              try {
-                const { DEFAULT_USERS } = require('@/config/constants')
-                return `✅ Constants: ${DEFAULT_USERS.KIDS.length} crianças`
-              } catch (e) {
-                return `❌ Constants: ${(e as Error).message}`
-              }
-            })()}
-          </div>
-          
-          <div>
-            {(() => {
-              try {
-                const { Button } = require('@/components/ui/button')
-                return `✅ UI Components carregados`
-              } catch (e) {
-                return `❌ UI Components: ${(e as Error).message}`
-              }
-            })()}
-          </div>
+          <div>✅ Constants: {DEFAULT_USERS.KIDS.length} crianças</div>
+          <div>✅ UI Components carregados</div>
         </div>
       </div>
     </div>

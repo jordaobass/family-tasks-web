@@ -114,7 +114,7 @@ export const DEFAULT_TASKS = {
 
 export const USER_COLORS = {
   louise: 'from-pink-400 to-yellow-300',
-  benicio: 'from-teal-400 to-emerald-600', 
-  adult1: 'from-indigo-500 to-purple-600',
-  adult2: 'from-pink-500 to-rose-500'
+  benicio: 'from-teal-400 to-emerald-600',
+  adult1: 'from-blue-400 to-purple-500',
+  adult2: 'from-purple-400 to-pink-500'
 } as const

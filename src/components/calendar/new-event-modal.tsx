@@ -93,7 +93,7 @@ export function NewEventModal({ open, onOpenChange, onEventCreate, selected_date
       end_time: is_all_day ? undefined : end_time,
       timezone,
       is_all_day,
-      recurrence_type: recurrence_type as any,
+      recurrence_type: recurrence_type as 'none' | 'daily' | 'weekly' | 'monthly',
       emoji: selected_emoji,
       type: event_type,
       user_id: selected_user,

@@ -127,3 +127,41 @@ export interface TaskIconProps {
   size?: 'small' | 'medium' | 'large'
   className?: string
 }
+
+// New interfaces for Template vs Instance architecture
+export interface TaskTemplate {
+  id: string
+  name: string
+  icon: string
+  points: number
+  category?: string
+  difficulty?: 'easy' | 'medium' | 'hard'
+  estimated_time?: number
+  recurrence: RecurrenceType
+  is_active: boolean
+  created_at: Date
+  updated_at: Date
+  created_by: string
+  family_id: string
+}
+
+export interface TaskInstance {
+  id: string
+  template_id: string
+  assigned_date: string // Format: YYYY-MM-DD
+  status: 'pending' | 'completed'
+  completed_by?: string
+  completed_by_name?: string
+  completed_at?: Date
+  points_earned?: number
+  created_at: Date
+  family_id: string
+}
+
+// Helper type for daily task management
+export interface DailyTaskCheck {
+  date: string // YYYY-MM-DD
+  templates_checked: string[]
+  instances_created: number
+  last_check: Date
+}

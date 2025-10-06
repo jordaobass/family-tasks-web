@@ -68,7 +68,10 @@ export default function HomeFull() {
     try {
       audio.play().catch(() => {
         // Create a simple victory melody using Web Audio API
-        const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+        type WindowWithWebkit = Window & typeof globalThis & { webkitAudioContext?: typeof AudioContext }
+        const AC = (window.AudioContext || (window as WindowWithWebkit).webkitAudioContext)
+        if (!AC) return
+        const audioContext = new AC()
         const playTone = (freq: number, duration: number, delay: number) => {
           setTimeout(() => {
             const oscillator = audioContext.createOscillator()
@@ -94,7 +97,7 @@ export default function HomeFull() {
         playTone(784, 0.2, 400)  // G
         playTone(1047, 0.4, 600) // C
       })
-    } catch (e) {
+    } catch {
       console.log('Audio not supported')
     }
   }, [])
