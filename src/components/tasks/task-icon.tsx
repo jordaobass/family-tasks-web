@@ -1,4 +1,5 @@
 import { FC } from 'react'
+import Image from 'next/image'
 import { TaskIconProps } from '@/types'
 import { cn } from '@/lib/utils'
 
@@ -14,10 +15,11 @@ export const TaskIcon: FC<TaskIconProps> = ({
         return <span className="select-none">{icon_value}</span>
       case 'image':
         return (
-          <img 
-            src={icon_value} 
-            alt="" 
-            className="w-full h-full object-cover rounded"
+          <Image
+            src={icon_value}
+            alt=""
+            fill
+            className="object-cover rounded"
           />
         )
       case 'font_awesome':
@@ -35,7 +37,7 @@ export const TaskIcon: FC<TaskIconProps> = ({
 
   return (
     <div className={cn(
-      'flex items-center justify-center flex-shrink-0',
+      'flex items-center justify-center flex-shrink-0 relative',
       size_classes[size],
       className
     )}>

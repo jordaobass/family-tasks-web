@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { familyBatchService } from '@/services/family-batch-service'
 import { dailyTaskService } from '@/services/daily-task-service'
 
+export const dynamic = 'force-dynamic'
+
 // API endpoint para gerar tarefas diárias automaticamente
 // Chamado automaticamente às 00:00 pelo Vercel Cron
 export async function POST(req: NextRequest) {

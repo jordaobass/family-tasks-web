@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
 import { firestoreTaskService } from '@/services/firestore-task-service'
 
+export const dynamic = 'force-dynamic'
+
 export async function GET() {
   try {
     console.log('🧪 Testando operações de tarefas...')
