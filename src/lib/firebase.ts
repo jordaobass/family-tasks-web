@@ -12,33 +12,39 @@ const firebaseConfig = {
 }
 
 // Lazy initialization - only initialize when actually used
-let firebaseApp: FirebaseApp | null = null
-let firestoreDb: Firestore | null = null
-let firebaseAuth: Auth | null = null
-let googleAuthProvider: GoogleAuthProvider | null = null
+let firebaseApp: FirebaseApp | undefined = undefined
+let firestoreDb: Firestore | undefined = undefined
+let firebaseAuth: Auth | undefined = undefined
+let googleAuthProvider: GoogleAuthProvider | undefined = undefined
 
 function getFirebaseApp(): FirebaseApp {
+  if (typeof window === 'undefined') {
+    // Durante SSR/build, retorna um app mock
+    return getApps().length > 0 ? getApp() : initializeApp(firebaseConfig)
+  }
+
   if (!firebaseApp) {
     firebaseApp = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp()
   }
   return firebaseApp
 }
 
-export function getDb(): Firestore {
+// Direct exports - sem Proxy
+export const db: Firestore = (() => {
   if (!firestoreDb) {
     firestoreDb = getFirestore(getFirebaseApp())
   }
   return firestoreDb
-}
+})()
 
-export function getFirebaseAuth(): Auth {
+export const auth: Auth = (() => {
   if (!firebaseAuth) {
     firebaseAuth = getAuth(getFirebaseApp())
   }
   return firebaseAuth
-}
+})()
 
-export function getGoogleProvider(): GoogleAuthProvider {
+export const googleProvider: GoogleAuthProvider = (() => {
   if (!googleAuthProvider) {
     googleAuthProvider = new GoogleAuthProvider()
     googleAuthProvider.setCustomParameters({
@@ -46,25 +52,6 @@ export function getGoogleProvider(): GoogleAuthProvider {
     })
   }
   return googleAuthProvider
-}
-
-// Legacy exports for backward compatibility
-export const db = new Proxy({} as Firestore, {
-  get(_target, prop) {
-    return getDb()[prop as keyof Firestore]
-  }
-})
-
-export const auth = new Proxy({} as Auth, {
-  get(_target, prop) {
-    return getFirebaseAuth()[prop as keyof Auth]
-  }
-})
-
-export const googleProvider = new Proxy({} as GoogleAuthProvider, {
-  get(_target, prop) {
-    return getGoogleProvider()[prop as keyof GoogleAuthProvider]
-  }
-})
+})()
 
 export default getFirebaseApp()
