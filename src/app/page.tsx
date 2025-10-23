@@ -6,7 +6,17 @@ import { Button } from '@/components/ui/button'
 import { RefreshCw, CheckCircle, Plus, BarChart3, Wifi, WifiOff } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { NewTaskModal } from '@/components/tasks/new-task-modal'
-import { task_service, Task, CreateTaskRequest } from '@/services/task-service'
+import { firestoreTaskService, type Task } from '@/services/firestore-task-service'
+
+interface CreateTaskRequest {
+  name: string
+  icon: string
+  points: number
+  category?: string
+  difficulty?: 'easy' | 'medium' | 'hard'
+  estimated_time?: number
+  recurrence?: 'none' | 'daily' | 'weekly' | 'monthly'
+}
 import { user_service } from '@/services/user-service'
 import Link from 'next/link'
 
@@ -21,7 +31,6 @@ export default function HomeFull() {
   const [new_task_modal_open, set_new_task_modal_open] = useState(false)
   const [is_loading_tasks, set_is_loading_tasks] = useState(false)
   
-  const task_status = task_service.getServiceStatus()
   const user_status = user_service.getServiceStatus()
 
   const [tasks, set_tasks] = useState<Task[]>([])
@@ -31,7 +40,21 @@ export default function HomeFull() {
     const load_tasks = async () => {
       set_is_loading_tasks(true)
       try {
-        const loaded_tasks = await task_service.getTasks()
+        // Initialize with default family ID
+        firestoreTaskService.setFamilyId('default_family')
+
+        console.log('📋 Carregando tarefas do Firestore...')
+        let loaded_tasks = await firestoreTaskService.getTodayTasks()
+        console.log('✅ Tarefas carregadas:', loaded_tasks.length)
+
+        // Se não houver tarefas, inicializar com as padrão
+        if (loaded_tasks.length === 0) {
+          console.log('🔧 Nenhuma tarefa encontrada. Inicializando tarefas padrão...')
+          await firestoreTaskService.initializeDailySystem('system')
+          loaded_tasks = await firestoreTaskService.getTodayTasks()
+          console.log('✅ Tarefas padrão criadas:', loaded_tasks.length)
+        }
+
         set_tasks(loaded_tasks)
         
         // Update scores from loaded tasks
@@ -118,7 +141,7 @@ export default function HomeFull() {
     }
 
     try {
-      const completed_task = await task_service.completeTask(task_id, {
+      const completed_task = await firestoreTaskService.completeTask(task_id, {
         completed_by: selected_user || 'unknown',
         completed_by_name: selected_user_name
       })
@@ -214,12 +237,12 @@ export default function HomeFull() {
 
   const handle_task_create = useCallback(async (new_task_request: CreateTaskRequest) => {
     try {
-      const created_task = await task_service.createTask(new_task_request)
+      const created_task = await firestoreTaskService.createTask(new_task_request, selected_user || 'unknown')
       set_tasks(prev => [...prev, created_task])
     } catch (error) {
       console.error('Error creating task:', error)
     }
-  }, [])
+  }, [selected_user])
 
   if (!is_mounted) {
     return (
@@ -295,7 +318,7 @@ export default function HomeFull() {
           
           {USE_MOCK_MODE && (
             <div className="mt-4 text-sm text-white/80">
-              Usando dados simulados • Tarefas: {task_status.total_tasks} • Usuários: {user_status.total_users}
+              Usando dados simulados • Usuários: {user_status.total_users}
             </div>
           )}
         </div>

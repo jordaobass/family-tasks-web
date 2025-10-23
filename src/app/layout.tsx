@@ -16,8 +16,60 @@ const geistMono = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "Tarefas da Família",
-  description: "Sistema de gerenciamento de tarefas domésticas para toda a família",
+  title: {
+    default: "Tarefas da Família",
+    template: "%s | Tarefas da Família"
+  },
+  description: "Sistema de gerenciamento de tarefas domésticas para toda a família. Organize, distribua e acompanhe tarefas com gamificação e pontos.",
+  keywords: ["tarefas", "família", "organização", "casa", "doméstico", "gamificação", "pontos"],
+  authors: [{ name: "NextTag" }],
+  creator: "NextTag",
+  publisher: "NextTag",
+  metadataBase: new URL('https://family.jonathanschenker.com.br'),
+  alternates: {
+    canonical: '/',
+  },
+  openGraph: {
+    type: 'website',
+    locale: 'pt_BR',
+    url: 'https://family.jonathanschenker.com.br',
+    title: 'Tarefas da Família',
+    description: 'Sistema de gerenciamento de tarefas domésticas para toda a família',
+    siteName: 'Tarefas da Família',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'Tarefas da Família',
+    description: 'Sistema de gerenciamento de tarefas domésticas para toda a família',
+  },
+  robots: {
+    index: true,
+    follow: true,
+    googleBot: {
+      index: true,
+      follow: true,
+      'max-video-preview': -1,
+      'max-image-preview': 'large',
+      'max-snippet': -1,
+    },
+  },
+  icons: {
+    icon: [
+      { url: '/icon', type: 'image/png' },
+    ],
+    apple: [
+      { url: '/apple-icon', type: 'image/png' },
+    ],
+  },
+  manifest: '/manifest.json',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'default',
+    title: 'Tarefas da Família',
+  },
+  formatDetection: {
+    telephone: false,
+  },
 };
 
 export default function RootLayout({
