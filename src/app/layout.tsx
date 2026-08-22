@@ -1,7 +1,7 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
 import { AuthProvider } from "@/providers/auth-provider";
-import { FirebaseDebug } from "@/components/common/FirebaseDebug";
+import { FamilyDataProvider } from "@/data";
 import "./globals.css";
 
 const geistSans = localFont({
@@ -42,16 +42,13 @@ export const metadata: Metadata = {
     title: 'Tarefas da Família',
     description: 'Sistema de gerenciamento de tarefas domésticas para toda a família',
   },
+  // Painel doméstico com rotina e nomes de crianças não tem por que estar no
+  // índice de busca. Enquanto as regras do Firestore estiverem abertas, isto ao
+  // menos evita que o app seja encontrado sem querer.
   robots: {
-    index: true,
-    follow: true,
-    googleBot: {
-      index: true,
-      follow: true,
-      'max-video-preview': -1,
-      'max-image-preview': 'large',
-      'max-snippet': -1,
-    },
+    index: false,
+    follow: false,
+    googleBot: { index: false, follow: false },
   },
   icons: {
     icon: [
@@ -72,6 +69,16 @@ export const metadata: Metadata = {
   },
 };
 
+// `viewportFit: 'cover'` para o painel usar a tela inteira em aparelho com notch.
+// O zoom continua liberado de propósito: travar pinça é barreira de acessibilidade,
+// e trancar a tela é papel do modo quiosque do aparelho, não do site.
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: "#6d28d9",
+};
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -84,8 +91,7 @@ export default function RootLayout({
         suppressHydrationWarning
       >
         <AuthProvider>
-          {children}
-          <FirebaseDebug />
+          <FamilyDataProvider>{children}</FamilyDataProvider>
         </AuthProvider>
       </body>
     </html>
