@@ -1,0 +1,7 @@
+# Painel doméstico: mostra a rotina e os nomes das crianças da casa.
+# Não há motivo para estar em índice de busca — bloqueia tudo, coerente com o
+# `robots: { index: false, follow: false }` declarado em src/app/layout.tsx.
+# Sem Sitemap de propósito: nada aqui deve ser rastreado.
+
+User-agent: *
+Disallow: /
