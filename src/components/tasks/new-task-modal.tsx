@@ -1,191 +1,228 @@
 'use client'
 
-import { useState } from 'react'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+/**
+ * Tarefa avulsa do dia — vale só para hoje e não vira template.
+ *
+ * O seletor de recorrência saiu: `addOneOffItem` não guarda recorrência nenhuma,
+ * e um campo que o banco ignora é pior do que campo nenhum — ele mente para quem
+ * está preenchendo. Tarefa que se repete se cadastra em "Gerenciar tarefas".
+ */
+
+import { useEffect, useState } from 'react'
+
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogFooter,
 } from '@/components/ui/dialog'
-import { Task, CreateTaskRequest } from '@/services/task-service'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import type { MemberRole, NewOneOffItemInput } from '@/data'
+import { cn } from '@/lib/utils'
 
 interface NewTaskModalProps {
   open: boolean
-  onOpenChange: (open: boolean) => void
-  onTaskCreate: (task: CreateTaskRequest) => void
-  activeTab: 'kids' | 'adults'
+  onOpenChange: (aberto: boolean) => void
+  /** Devolve `true` só quando a tarefa foi mesmo gravada. */
+  onCriar: (entrada: NewOneOffItemInput) => Promise<boolean>
+  /** Em qual aba a tarefa vai aparecer. */
+  audiencia: MemberRole
 }
 
-const EMOJI_OPTIONS = [
+const ICONES = [
   '🦷', '🚿', '🛏️', '🥣', '📚', '🧸', '🐕', '🧹', '🍳', '🧽',
   '🧼', '🍎', '💧', '🧴', '🎒', '✏️', '📝', '🖍️', '📖', '⚽',
   '🎨', '🧩', '🎵', '🎮', '🚗', '🌱', '🗑️', '💳', '🍽️', '🛒',
   '👔', '🧦', '👗', '👕', '👖', '🧥', '👞', '🧢', '🕶️', '⌚',
-  '🎯', '🏆', '⭐', '💎', '🔥', '💪', '✨', '🎉', '🎊', '🌟'
+  '🎯', '🏆', '⭐', '💎', '🔥', '💪', '✨', '🎉', '🎊', '🌟',
 ]
 
-const RECURRENCE_OPTIONS = [
-  { value: 'once', label: 'Uma vez' },
-  { value: 'daily', label: 'Diário' },
-  { value: 'weekly', label: 'Semanal' },
-  { value: 'weekdays', label: 'Dias úteis' },
-  { value: 'weekends', label: 'Fins de semana' },
-  { value: 'custom', label: 'Personalizado' }
+const OPCOES_DE_PONTOS = [
+  { valor: 5, rotulo: '5 pontos — muito fácil' },
+  { valor: 10, rotulo: '10 pontos — fácil' },
+  { valor: 15, rotulo: '15 pontos — médio' },
+  { valor: 20, rotulo: '20 pontos — difícil' },
+  { valor: 25, rotulo: '25 pontos — muito difícil' },
 ]
 
-export function NewTaskModal({ open, onOpenChange, onTaskCreate, activeTab }: NewTaskModalProps) {
-  const [task_name, set_task_name] = useState('')
-  const [selected_emoji, set_selected_emoji] = useState('📝')
-  const [points_value, set_points_value] = useState(activeTab === 'kids' ? 10 : 0)
-  const [recurrence, set_recurrence] = useState('daily')
+const ICONE_PADRAO = '📝'
 
-  const handle_submit = (e: React.FormEvent) => {
-    e.preventDefault()
-    
-    if (!task_name.trim()) return
+export function NewTaskModal({ open, onOpenChange, onCriar, audiencia }: NewTaskModalProps) {
+  const ehCrianca = audiencia === 'crianca'
+  const [nome, setNome] = useState('')
+  const [icone, setIcone] = useState(ICONE_PADRAO)
+  const [pontos, setPontos] = useState(ehCrianca ? 10 : 0)
+  const [salvando, setSalvando] = useState(false)
+  const [falha, setFalha] = useState<string | null>(null)
 
-    const new_task: CreateTaskRequest = {
-      name: task_name.trim(),
-      icon: selected_emoji,
-      points: points_value,
-      category: activeTab === 'kids' ? 'general' : 'household',
-      difficulty: 'easy',
-      estimated_time: 15
-    }
+  // Reabrir o modal (ou trocar de aba) sempre começa com o formulário limpo.
+  useEffect(() => {
+    if (!open) return
+    setNome('')
+    setIcone(ICONE_PADRAO)
+    setPontos(audiencia === 'crianca' ? 10 : 0)
+    setFalha(null)
+    setSalvando(false)
+  }, [open, audiencia])
 
-    onTaskCreate(new_task)
-    
-    // Reset form
-    set_task_name('')
-    set_selected_emoji('📝')
-    set_points_value(activeTab === 'kids' ? 10 : 0)
-    set_recurrence('daily')
-    onOpenChange(false)
-  }
+  const enviar = async (evento: React.FormEvent) => {
+    evento.preventDefault()
+    if (!nome.trim() || salvando) return
 
-  const handle_cancel = () => {
-    // Reset form
-    set_task_name('')
-    set_selected_emoji('📝')
-    set_points_value(activeTab === 'kids' ? 10 : 0)
-    set_recurrence('daily')
-    onOpenChange(false)
+    setSalvando(true)
+    setFalha(null)
+    const gravou = await onCriar({
+      name: nome.trim(),
+      icon: icone,
+      points: ehCrianca ? pontos : 0,
+      audience: audiencia,
+      category: ehCrianca ? 'geral' : 'casa',
+    })
+    setSalvando(false)
+
+    if (gravou) onOpenChange(false)
+    else setFalha('Não deu para salvar agora. Tente de novo em alguns segundos.')
   }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[500px] max-h-[80vh] overflow-y-auto">
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-[560px]">
         <DialogHeader>
-          <DialogTitle className="text-xl font-bold text-center">
-            ➕ Adicionar Nova Tarefa
+          <DialogTitle className="text-center text-xl font-bold">
+            ➕ Nova tarefa de hoje
           </DialogTitle>
+          <DialogDescription className="text-center">
+            Vale só para hoje. Para uma tarefa que se repete todo dia, cadastre em
+            &quot;Gerenciar tarefas&quot;.
+          </DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={handle_submit} className="space-y-6">
-          {/* Emoji Selection */}
-          <div className="space-y-3">
-            <Label htmlFor="emoji" className="text-sm font-semibold">
-              📱 Ícone da Tarefa
-            </Label>
-            <div className="flex items-center gap-3">
-              <div className="w-12 h-12 bg-gray-100 rounded-xl flex items-center justify-center text-2xl border-2 border-gray-200">
-                {selected_emoji}
-              </div>
-              <div className="flex-1 grid grid-cols-8 gap-2 max-h-24 overflow-y-auto p-2 border rounded-lg bg-gray-50">
-                {EMOJI_OPTIONS.map((emoji) => (
-                  <button
-                    key={emoji}
-                    type="button"
-                    onClick={() => set_selected_emoji(emoji)}
-                    className={`w-8 h-8 rounded-lg flex items-center justify-center text-lg hover:bg-white transition-colors ${
-                      selected_emoji === emoji ? 'bg-blue-100 border-2 border-blue-400' : 'bg-white border border-gray-200'
-                    }`}
-                  >
-                    {emoji}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
+        <form onSubmit={enviar} className="space-y-6">
+          <SeletorDeIcone selecionado={icone} aoSelecionar={setIcone} />
 
-          {/* Task Name */}
           <div className="space-y-2">
-            <Label htmlFor="task_name" className="text-sm font-semibold">
-              📝 Nome da Tarefa
+            <Label htmlFor="nome-tarefa" className="text-sm font-semibold">
+              📝 Nome da tarefa
             </Label>
             <Input
-              id="task_name"
+              id="nome-tarefa"
               type="text"
-              value={task_name}
-              onChange={(e) => set_task_name(e.target.value)}
-              placeholder="Ex: Escovar os dentes, Lavar louça..."
-              className="w-full"
+              value={nome}
+              onChange={(evento) => setNome(evento.target.value)}
+              placeholder="Ex.: guardar os brinquedos"
+              className="h-12 w-full text-base"
+              autoComplete="off"
               required
             />
           </div>
 
-          {/* Points (only for kids) */}
-          {activeTab === 'kids' && (
-            <div className="space-y-2">
-              <Label htmlFor="points" className="text-sm font-semibold">
-                ⭐ Pontos
-              </Label>
-              <Select value={points_value.toString()} onValueChange={(value) => set_points_value(Number(value))}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Selecione os pontos" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="5">5 pontos - Muito fácil</SelectItem>
-                  <SelectItem value="10">10 pontos - Fácil</SelectItem>
-                  <SelectItem value="15">15 pontos - Médio</SelectItem>
-                  <SelectItem value="20">20 pontos - Difícil</SelectItem>
-                  <SelectItem value="25">25 pontos - Muito difícil</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          )}
+          {ehCrianca && <SeletorDePontos valor={pontos} aoMudar={setPontos} />}
 
-          {/* Recurrence */}
-          <div className="space-y-2">
-            <Label htmlFor="recurrence" className="text-sm font-semibold">
-              🔄 Recorrência
-            </Label>
-            <Select value={recurrence} onValueChange={set_recurrence}>
-              <SelectTrigger>
-                <SelectValue placeholder="Selecione a recorrência" />
-              </SelectTrigger>
-              <SelectContent>
-                {RECURRENCE_OPTIONS.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+          {falha && (
+            <p role="alert" className="rounded-xl bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
+              {falha}
+            </p>
+          )}
 
           <DialogFooter className="flex gap-3">
             <Button
               type="button"
-              onClick={handle_cancel}
-              className="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-800 border border-gray-300 font-semibold"
+              onClick={() => onOpenChange(false)}
+              // `hover:` igual ao estado normal: no iOS o hover gruda depois do toque.
+              className="h-14 flex-1 border border-gray-300 bg-gray-100 text-base font-semibold text-gray-800 hover:bg-gray-100 active:bg-gray-200"
             >
               Cancelar
             </Button>
             <Button
               type="submit"
-              className="flex-1 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white font-bold border-none"
+              disabled={salvando || !nome.trim()}
+              className="h-14 flex-1 border-none bg-gradient-to-r from-blue-500 to-purple-600 text-base font-bold text-white hover:bg-transparent active:scale-[0.98]"
             >
-              ➕ Criar Tarefa
+              {salvando ? 'Salvando…' : '➕ Criar tarefa'}
             </Button>
           </DialogFooter>
         </form>
       </DialogContent>
     </Dialog>
+  )
+}
+
+function SeletorDeIcone({
+  selecionado,
+  aoSelecionar,
+}: {
+  selecionado: string
+  aoSelecionar: (icone: string) => void
+}) {
+  return (
+    <div className="space-y-3">
+      <span className="block text-sm font-semibold">🎨 Ícone da tarefa</span>
+      <div className="flex items-start gap-3">
+        <div
+          aria-hidden
+          className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl border-2 border-gray-200 bg-gray-100 text-3xl"
+        >
+          {selecionado}
+        </div>
+        <div className="grid max-h-40 flex-1 grid-cols-6 gap-2 overflow-y-auto rounded-lg border bg-gray-50 p-2 sm:grid-cols-8">
+          {ICONES.map((icone) => (
+            <button
+              key={icone}
+              type="button"
+              aria-label={`Usar o ícone ${icone}`}
+              aria-pressed={selecionado === icone}
+              onClick={() => aoSelecionar(icone)}
+              className={cn(
+                'flex h-12 w-12 items-center justify-center rounded-lg text-2xl transition-transform active:scale-90',
+                selecionado === icone
+                  ? 'border-2 border-blue-500 bg-blue-100'
+                  : 'border border-gray-200 bg-white',
+              )}
+            >
+              {icone}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function SeletorDePontos({
+  valor,
+  aoMudar,
+}: {
+  valor: number
+  aoMudar: (pontos: number) => void
+}) {
+  return (
+    <div className="space-y-2">
+      <Label htmlFor="pontos-tarefa" className="text-sm font-semibold">
+        ⭐ Pontos
+      </Label>
+      <Select value={String(valor)} onValueChange={(novo) => aoMudar(Number(novo))}>
+        <SelectTrigger id="pontos-tarefa" className="h-12 text-base">
+          <SelectValue placeholder="Quantos pontos vale" />
+        </SelectTrigger>
+        <SelectContent>
+          {OPCOES_DE_PONTOS.map((opcao) => (
+            <SelectItem key={opcao.valor} value={String(opcao.valor)}>
+              {opcao.rotulo}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
   )
 }
