@@ -38,3 +38,11 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# backups locais do Firestore (podem conter dados reais da familia)
+backups/
+backup-*.json
+
+# logs do emulador
+firestore-debug.log
+firebase-debug.log

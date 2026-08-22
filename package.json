@@ -7,7 +7,14 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "validate:env": "node scripts/validate-env.js"
+    "backup:firestore": "npx --yes tsx scripts/backup-firestore.ts",
+    "migrate:firestore": "npx --yes tsx scripts/migrate-firestore.ts",
+    "migrate:firestore:apply": "npx --yes tsx scripts/migrate-firestore.ts --apply",
+    "emulador": "npx --yes firebase-tools@latest emulators:start --only firestore --project demo-family-tasks",
+    "verificar:caminho-quente": "NEXT_PUBLIC_FIRESTORE_EMULATOR_HOST=127.0.0.1:8390 NEXT_PUBLIC_FIREBASE_PROJECT_ID=demo-family-tasks npx --yes tsx scripts/verificar-caminho-quente.ts",
+    "semear:demo": "NEXT_PUBLIC_FIRESTORE_EMULATOR_HOST=127.0.0.1:8390 NEXT_PUBLIC_FIREBASE_PROJECT_ID=demo-family-tasks NEXT_PUBLIC_FAMILY_ID=demo_painel npx --yes tsx scripts/semear-demo.ts",
+    "verificar:toque": "node scripts/verificar-toque.mjs",
+    "dev:emulador": "NEXT_PUBLIC_FIRESTORE_EMULATOR_HOST=127.0.0.1:8390 NEXT_PUBLIC_FIREBASE_PROJECT_ID=demo-family-tasks NEXT_PUBLIC_FAMILY_ID=demo_painel next dev -p 11450"
   },
   "dependencies": {
     "@hello-pangea/dnd": "^18.0.1",
