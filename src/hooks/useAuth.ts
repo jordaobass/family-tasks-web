@@ -3,12 +3,10 @@ import {
   User,
   signInWithPopup,
   signOut as firebaseSignOut,
-  onAuthStateChanged,
-  GoogleAuthProvider
+  onAuthStateChanged
 } from 'firebase/auth'
-import { auth, googleProvider } from '@/lib/firebase'
 import { doc, setDoc, getDoc } from 'firebase/firestore'
-import { db } from '@/lib/firebase'
+import { obterAuth, obterDb, obterGoogleProvider } from '@/lib/firebase'
 
 export interface AuthUser extends User {
   familyId?: string
@@ -20,10 +18,10 @@ export const useAuth = () => {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+    const unsubscribe = onAuthStateChanged(obterAuth(), async (firebaseUser) => {
       if (firebaseUser) {
         // Get or create user profile
-        const userRef = doc(db, 'users', firebaseUser.uid)
+        const userRef = doc(obterDb(), 'users', firebaseUser.uid)
         const userDoc = await getDoc(userRef)
 
         let familyId = ''
@@ -60,7 +58,7 @@ export const useAuth = () => {
     try {
       setError(null)
       setLoading(true)
-      const result = await signInWithPopup(auth, googleProvider)
+      const result = await signInWithPopup(obterAuth(), obterGoogleProvider())
       return result.user
     } catch (error) {
       console.error('Error signing in with Google:', error)
@@ -73,7 +71,7 @@ export const useAuth = () => {
 
   const signOut = async () => {
     try {
-      await firebaseSignOut(auth)
+      await firebaseSignOut(obterAuth())
     } catch (error) {
       console.error('Error signing out:', error)
       setError('Erro ao fazer logout')
