@@ -11,11 +11,11 @@ import { createFirestoreFamilyData } from '@/data/firestore-family-data'
 const FAMILIA = process.env.NEXT_PUBLIC_FAMILY_ID?.trim() || 'demo_painel'
 
 const TEMPLATES = [
-  { name: 'Escovar os dentes', icon: '🦷', points: 10, audience: 'crianca' as const },
-  { name: 'Arrumar a cama', icon: '🛏️', points: 10, audience: 'crianca' as const },
-  { name: 'Guardar os brinquedos', icon: '🧸', points: 15, audience: 'crianca' as const },
-  { name: 'Lavar a louça', icon: '🍽️', points: 0, audience: 'adulto' as const },
-  { name: 'Levar o lixo', icon: '🗑️', points: 0, audience: 'adulto' as const },
+  { name: 'Escovar os dentes', icon: '🦷', points: 10, audience: 'crianca' as const, completionMode: 'cada_um' as const },
+  { name: 'Arrumar a cama', icon: '🛏️', points: 10, audience: 'crianca' as const, completionMode: 'cada_um' as const },
+  { name: 'Guardar os brinquedos', icon: '🧸', points: 15, audience: 'crianca' as const, completionMode: 'cada_um' as const },
+  { name: 'Lavar a louça', icon: '🍽️', points: 0, audience: 'adulto' as const, completionMode: 'basta_um' as const },
+  { name: 'Levar o lixo', icon: '🗑️', points: 0, audience: 'adulto' as const, completionMode: 'basta_um' as const },
 ]
 
 async function main() {

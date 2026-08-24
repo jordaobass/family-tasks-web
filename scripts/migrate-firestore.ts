@@ -5,10 +5,13 @@
  *   - escolhe o `familyId` canônico e o imprime (vai para `NEXT_PUBLIC_FAMILY_ID`);
  *   - semeia `families/{canonico}/members` (louise, benicio, adult1, adult2);
  *   - unifica `task_templates` de TODAS as famílias no canônico, deduplicando por nome,
- *     e ACRESCENTA `audience` + `days_of_week`;
+ *     e ACRESCENTA `audience` + `completion_mode` + `days_of_week`;
  *   - converte as tarefas permanentes (`families/*\/tasks`) em templates e, quando
  *     concluídas, também em `DayItem` no doc do dia da conclusão;
  *   - converte `task_instances` em `DayItem`, mesclando nos mesmos docs `days/{YYYY-MM-DD}`;
+ *   - traduz a conclusão ÚNICA do modelo antigo (`completed_by`/`completed_at`/
+ *     `points_earned`) em UMA marca dentro de `completions`, preservando quem, quando
+ *     e quantos pontos;
  *   - recalcula `points_total` de cada membro a partir dos dias gravados;
  *   - verifica contagens e pontos antes/depois e sai com código != 0 se divergir.
  *
@@ -42,10 +45,13 @@ import {
 
 import { FUSO_FAMILIA, ehDataValida, formatarDataFamilia } from '../src/data/date'
 import type {
+  CompletionMode,
   DayItem,
   Difficulty,
   IsoDate,
   IsoDateTime,
+  ItemCompletion,
+  ItemStatus,
   MemberRole,
 } from '../src/data/types'
 import {
@@ -83,6 +89,15 @@ const MEMBROS = [
 const NOME_ORFAO = '(template removido)'
 const TAMANHO_LOTE = 400
 
+/**
+ * Uma conclusão do modelo antigo sem `completed_by` não tem dono conhecido — mas
+ * ELA EXISTIU. Descartá-la faria o item voltar a "pendente" no destino (o status
+ * agora é derivado das marcas), apagando um fato do histórico. A marca é criada
+ * com este dono explícito e o caso vai para os avisos, para o dono ver.
+ */
+const MEMBRO_DESCONHECIDO = 'desconhecido'
+const NOME_DESCONHECIDO = '(não identificado)'
+
 // ---------------------------------------------------------------------------
 // Conversão domínio <-> Firestore
 // ESPELHO de `src/data/firestore-family-data.ts` (paraItem / itemParaFirestore).
@@ -112,7 +127,64 @@ function paraIsoDateTime(valor: unknown): IsoDateTime | undefined {
   return paraData(valor)?.toISOString()
 }
 
-function paraItemDominio(bruto: DocumentData): DayItem {
+/** Padrão do adapter (`paraTemplate`): criança faz a sua, adulto basta um. */
+function modoDe(audiencia: MemberRole): CompletionMode {
+  return audiencia === 'crianca' ? 'cada_um' : 'basta_um'
+}
+
+/** ESPELHO de `calcularStatus` no adapter: o estado sai das marcas, nunca do banco. */
+function calcularStatus(
+  modo: CompletionMode,
+  esperados: string[],
+  marcas: ItemCompletion[],
+): ItemStatus {
+  if (marcas.length === 0) return 'pendente'
+  if (modo === 'basta_um') return 'concluida'
+  // Sem lista de esperados, uma marca já basta — é o que o dado antigo permite afirmar.
+  if (esperados.length === 0) return 'concluida'
+  const feitos = new Set(marcas.map((marca) => marca.memberId))
+  return esperados.every((id) => feitos.has(id)) ? 'concluida' : 'parcial'
+}
+
+/**
+ * `at` é obrigatório em `ItemCompletion`. Quando o documento antigo não traz data
+ * nenhuma, ancora-se no meio-dia UTC do próprio dia da conclusão: é determinístico
+ * (re-rodar produz o mesmo valor, então a idempotência continua valendo) e cai no
+ * dia certo no fuso da família.
+ */
+function instanteDoDia(dia: IsoDate): IsoDateTime {
+  return `${dia}T12:00:00.000Z`
+}
+
+/** ESPELHO da leitura de marcas em `paraItem`: aceita o formato novo E o antigo. */
+function marcasDoBruto(bruto: DocumentData, dia: IsoDate): ItemCompletion[] {
+  const pontos = Number(bruto.points ?? 0)
+  if (Array.isArray(bruto.completions)) {
+    return bruto.completions.map((marca: DocumentData) => ({
+      memberId: String(marca.member_id),
+      memberName: String(marca.member_name ?? marca.member_id),
+      at: paraIsoDateTime(marca.at) ?? instanteDoDia(dia),
+      points: Number(marca.points ?? pontos),
+    }))
+  }
+  // Formato antigo: a conclusão única do item vira UMA marca, nada se perde.
+  if (bruto.status === 'concluida' && bruto.completed_by) {
+    return [
+      {
+        memberId: String(bruto.completed_by),
+        memberName: String(bruto.completed_by_name ?? bruto.completed_by),
+        at: paraIsoDateTime(bruto.completed_at) ?? instanteDoDia(dia),
+        points: Number(bruto.points_earned ?? pontos),
+      },
+    ]
+  }
+  return []
+}
+
+function paraItemDominio(bruto: DocumentData, dia: IsoDate): DayItem {
+  const modo: CompletionMode = bruto.completion_mode === 'cada_um' ? 'cada_um' : 'basta_um'
+  const esperados: string[] = Array.isArray(bruto.expected_member_ids) ? bruto.expected_member_ids : []
+  const marcas = marcasDoBruto(bruto, dia)
   return {
     id: String(bruto.id),
     templateId: bruto.template_id ?? null,
@@ -123,11 +195,20 @@ function paraItemDominio(bruto: DocumentData): DayItem {
     category: bruto.category ?? undefined,
     difficulty: (bruto.difficulty as Difficulty) ?? undefined,
     estimatedTime: bruto.estimated_time ?? undefined,
-    status: bruto.status === 'concluida' ? 'concluida' : 'pendente',
-    completedBy: bruto.completed_by ?? undefined,
-    completedByName: bruto.completed_by_name ?? undefined,
-    completedAt: paraIsoDateTime(bruto.completed_at),
-    pointsEarned: bruto.points_earned ?? undefined,
+    completionMode: modo,
+    expectedMemberIds: esperados,
+    completions: marcas,
+    status: calcularStatus(modo, esperados, marcas),
+  }
+}
+
+function marcaParaFirestore(marca: ItemCompletion): Record<string, unknown> {
+  return {
+    member_id: marca.memberId,
+    member_name: marca.memberName,
+    // `serverTimestamp()` é proibido dentro de array no Firestore — vai Timestamp mesmo.
+    at: Timestamp.fromDate(new Date(marca.at)),
+    points: marca.points,
   }
 }
 
@@ -142,12 +223,11 @@ function itemParaFirestore(item: DayItem): Record<string, unknown> {
     category: item.category,
     difficulty: item.difficulty,
     estimated_time: item.estimatedTime,
-    status: item.status,
-    completed_by: item.completedBy,
-    completed_by_name: item.completedByName,
-    // `serverTimestamp()` é proibido dentro de array no Firestore — vai Timestamp mesmo.
-    completed_at: item.completedAt ? Timestamp.fromDate(new Date(item.completedAt)) : undefined,
-    points_earned: item.pointsEarned,
+    completion_mode: item.completionMode,
+    expected_member_ids: item.expectedMemberIds,
+    // `status` NÃO é gravado: é derivado das marcas na leitura. Gravar um derivado
+    // é criar duas fontes de verdade que um dia discordam.
+    completions: item.completions.map(marcaParaFirestore),
   })
 }
 
@@ -293,6 +373,7 @@ interface Snapshot {
   icon: string
   points: number
   audience: MemberRole
+  completionMode: CompletionMode
   category?: string
   difficulty?: Difficulty
   estimatedTime?: number
@@ -335,14 +416,28 @@ function diasDaSemanaDe(recorrencia: unknown): number[] {
 
 function snapshotDe(dados: DocumentData): Snapshot {
   const pontos = Number(dados.points ?? 0)
+  const audiencia = (dados.audience as MemberRole) ?? audienciaDe(pontos)
   return {
     name: String(dados.name ?? '').trim(),
     icon: String(dados.icon ?? '📋'),
     points: pontos,
-    audience: (dados.audience as MemberRole) ?? audienciaDe(pontos),
+    audience: audiencia,
+    completionMode: (dados.completion_mode as CompletionMode) ?? modoDe(audiencia),
     category: dados.category ?? undefined,
     difficulty: (dados.difficulty as Difficulty) ?? undefined,
     estimatedTime: dados.estimated_time ?? undefined,
+  }
+}
+
+/** Snapshot de instância cujo template sumiu — nada é descartado, vira item "órfão". */
+function snapshotOrfao(pontos: number): Snapshot {
+  const audiencia = audienciaDe(pontos)
+  return {
+    name: NOME_ORFAO,
+    icon: '❓',
+    points: pontos,
+    audience: audiencia,
+    completionMode: modoDe(audiencia),
   }
 }
 
@@ -351,11 +446,13 @@ function templateParaFirestore(fonte: DocBruto, colecao: string, canonico: strin
   const dados = fonte.dados
   const pontos = Number(dados.points ?? 0)
   const recorrencia = dados.recurrence ?? 'daily'
+  const audiencia = (dados.audience as MemberRole) ?? audienciaDe(pontos)
   return semUndefined({
     name: String(dados.name ?? '').trim() || `(sem nome) ${fonte.id}`,
     icon: dados.icon ?? '📋',
     points: pontos,
-    audience: dados.audience ?? audienciaDe(pontos),
+    audience: audiencia,
+    completion_mode: dados.completion_mode ?? modoDe(audiencia),
     recurrence: recorrencia,
     days_of_week: dados.days_of_week ?? diasDaSemanaDe(recorrencia),
     category: dados.category ?? undefined,
@@ -412,9 +509,12 @@ function classificar(
 
 /** Template que já vive no canônico: só ACRESCENTA os campos novos, e só se faltarem. */
 function planoDeCompletar(fonte: DocBruto, rotulo: string): PlanoTemplate {
+  const dados = fonte.dados
+  const audiencia = (dados.audience as MemberRole) ?? audienciaDe(Number(dados.points ?? 0))
   const falta = semUndefined({
-    audience: fonte.dados.audience === undefined ? audienciaDe(Number(fonte.dados.points ?? 0)) : undefined,
-    days_of_week: fonte.dados.days_of_week === undefined ? diasDaSemanaDe(fonte.dados.recurrence) : undefined,
+    audience: dados.audience === undefined ? audiencia : undefined,
+    completion_mode: dados.completion_mode === undefined ? modoDe(audiencia) : undefined,
+    days_of_week: dados.days_of_week === undefined ? diasDaSemanaDe(dados.recurrence) : undefined,
   })
   const acao = Object.keys(falta).length > 0 ? 'completar' : 'nada'
   return { id: fonte.id, rotulo, acao, dados: falta }
@@ -465,9 +565,12 @@ interface Esperado {
   id: string
   fonte: 'tarefa' | 'instancia'
   rotulo: string
-  concluido: boolean
-  membro?: string
-  pontos: number
+  /**
+   * As marcas que a ORIGEM manda existir no destino. O modelo antigo tinha uma
+   * conclusão por item, então aqui há 0 ou 1 marca; é isso que a verificação
+   * compara, uma a uma, contra o que ficou gravado.
+   */
+  marcas: ItemCompletion[]
 }
 
 interface PlanoMigracao {
@@ -523,6 +626,41 @@ function ehTarefaConcluida(dados: DocumentData): boolean {
   return dados.status === 'completed'
 }
 
+/**
+ * Converte a conclusão ÚNICA do modelo antigo em UMA marca, preservando quem, quando
+ * e quantos pontos. Sem `completed_by` não há dono conhecido — mas a conclusão
+ * existiu, então a marca é criada com dono explícito e o caso vai para os avisos.
+ */
+function marcaDeConclusao(
+  dados: DocumentData,
+  pontos: number,
+  dia: IsoDate,
+  rotulo: string,
+  plano: PlanoMigracao,
+): ItemCompletion {
+  const membro = String(dados.completed_by ?? '').trim()
+  if (!membro) {
+    plano.avisos.push(`${rotulo}: concluída sem completed_by → marca de "${MEMBRO_DESCONHECIDO}"`)
+  }
+  return {
+    memberId: membro || MEMBRO_DESCONHECIDO,
+    memberName: String(dados.completed_by_name ?? '').trim() || membro || NOME_DESCONHECIDO,
+    at: paraIsoDateTime(dados.completed_at ?? dados.updated_at ?? dados.created_at) ?? instanteDoDia(dia),
+    points: pontos,
+  }
+}
+
+/**
+ * O histórico migrado nasce SEM `expectedMemberIds`, de propósito: não dá para saber
+ * quem *deveria* ter feito uma tarefa de outubro de 2025, e preencher com os membros
+ * de hoje inventaria dívida retroativa — o dia de ontem passaria a parecer incompleto.
+ * Com a lista vazia, `calcularStatus` trata uma marca como conclusão, que é exatamente
+ * o que o dado antigo permite afirmar.
+ */
+function semEsperados(): string[] {
+  return []
+}
+
 /** Tarefa permanente concluída vira um `DayItem` no dia em que foi concluída. */
 function planejarTarefas(origem: Origem, templates: PlanoTemplates, plano: PlanoMigracao): void {
   for (const tarefa of origem.tarefas) {
@@ -539,33 +677,38 @@ function planejarTarefas(origem: Origem, templates: PlanoTemplates, plano: Plano
       plano.avisos.push(`tasks/${tarefa.id}: sem completed_at, usei ${quando.campo} → ${quando.data}`)
     }
 
+    const rotulo = `${tarefa.familia}/tasks/${tarefa.id}`
     const snapshot = templates.snapshotPorOrigem.get(`${tarefa.familia}/${tarefa.id}`)
-    const item = itemDeTarefa(tarefa, snapshot, templates)
+    const item = itemDeTarefa(tarefa, snapshot, templates, quando.data, plano)
     inserirItem(plano, quando.data, { item, fonte: 'tarefa' })
     plano.esperados.push({
       data: quando.data,
       id: item.id,
       fonte: 'tarefa',
-      rotulo: `${tarefa.familia}/tasks/${tarefa.id}`,
-      concluido: true,
-      membro: item.completedBy,
-      pontos: item.pointsEarned ?? 0,
+      rotulo,
+      marcas: item.completions,
     })
   }
 }
 
-function itemDeTarefa(tarefa: DocBruto, snapshot: Snapshot | undefined, templates: PlanoTemplates): DayItem {
+function itemDeTarefa(
+  tarefa: DocBruto,
+  snapshot: Snapshot | undefined,
+  templates: PlanoTemplates,
+  data: IsoDate,
+  plano: PlanoMigracao,
+): DayItem {
   const base = snapshot ?? snapshotDe(tarefa.dados)
+  const rotulo = `tasks/${tarefa.id} (${tarefa.familia})`
+  const marcas = [marcaDeConclusao(tarefa.dados, base.points, data, rotulo, plano)]
   return {
     // Id determinístico = id do doc antigo: re-rodar não duplica.
     id: tarefa.id,
     templateId: templates.destinoPorOrigem.get(`${tarefa.familia}/${tarefa.id}`) ?? null,
     ...base,
-    status: 'concluida',
-    completedBy: tarefa.dados.completed_by ?? undefined,
-    completedByName: tarefa.dados.completed_by_name ?? undefined,
-    completedAt: paraIsoDateTime(tarefa.dados.completed_at ?? tarefa.dados.updated_at),
-    pointsEarned: base.points,
+    expectedMemberIds: semEsperados(),
+    completions: marcas,
+    status: calcularStatus(base.completionMode, semEsperados(), marcas),
   }
 }
 
@@ -575,16 +718,14 @@ function planejarInstancias(origem: Origem, templates: PlanoTemplates, plano: Pl
     const data = dataDaInstancia(instancia, plano)
     if (!data) continue
 
-    const item = itemDeInstancia(instancia, templates, plano)
+    const item = itemDeInstancia(instancia, data, templates, plano)
     inserirItem(plano, data, { item, fonte: 'instancia' })
     plano.esperados.push({
       data,
       id: item.id,
       fonte: 'instancia',
       rotulo: `${instancia.familia}/task_instances/${instancia.id}`,
-      concluido: item.status === 'concluida',
-      membro: item.completedBy,
-      pontos: item.status === 'concluida' ? (item.pointsEarned ?? item.points) : 0,
+      marcas: item.completions,
     })
   }
 }
@@ -604,7 +745,13 @@ function dataDaInstancia(instancia: DocBruto, plano: PlanoMigracao): IsoDate | n
   return null
 }
 
-function itemDeInstancia(instancia: DocBruto, templates: PlanoTemplates, plano: PlanoMigracao): DayItem {
+function itemDeInstancia(
+  instancia: DocBruto,
+  data: IsoDate,
+  templates: PlanoTemplates,
+  plano: PlanoMigracao,
+): DayItem {
+  const rotulo = `task_instances/${instancia.id}`
   const chaveOrigem = `${instancia.familia}/${String(instancia.dados.template_id ?? '')}`
   const snapshot = templates.snapshotPorOrigem.get(chaveOrigem)
   const concluida = instancia.dados.status === 'completed'
@@ -612,25 +759,21 @@ function itemDeInstancia(instancia: DocBruto, templates: PlanoTemplates, plano: 
 
   if (!snapshot) {
     plano.avisos.push(
-      `task_instances/${instancia.id}: template ${instancia.dados.template_id} não existe → item "${NOME_ORFAO}"`,
+      `${rotulo}: template ${instancia.dados.template_id} não existe → item "${NOME_ORFAO}"`,
     )
   }
 
-  const base: Snapshot = snapshot ?? {
-    name: NOME_ORFAO,
-    icon: '❓',
-    points: pontosGanhos,
-    audience: audienciaDe(pontosGanhos),
-  }
+  const base = snapshot ?? snapshotOrfao(pontosGanhos)
+  const marcas = concluida
+    ? [marcaDeConclusao(instancia.dados, pontosGanhos, data, rotulo, plano)]
+    : []
   return {
     id: instancia.id,
     templateId: snapshot ? (templates.destinoPorOrigem.get(chaveOrigem) ?? null) : null,
     ...base,
-    status: concluida ? 'concluida' : 'pendente',
-    completedBy: concluida ? (instancia.dados.completed_by ?? undefined) : undefined,
-    completedByName: concluida ? (instancia.dados.completed_by_name ?? undefined) : undefined,
-    completedAt: concluida ? paraIsoDateTime(instancia.dados.completed_at) : undefined,
-    pointsEarned: concluida ? pontosGanhos : undefined,
+    expectedMemberIds: semEsperados(),
+    completions: marcas,
+    status: calcularStatus(base.completionMode, semEsperados(), marcas),
   }
 }
 
@@ -639,7 +782,8 @@ function carregarDiasExistentes(docs: DocBruto[], plano: PlanoMigracao): void {
     const itens = Array.isArray(dia.dados.items) ? dia.dados.items : []
     const doDia = new Map<string, ItemDoDia>()
     for (const bruto of itens) {
-      const item = paraItemDominio(bruto as DocumentData)
+      // `dia.id` é a data do doc: serve de âncora quando a marca antiga não tem instante.
+      const item = paraItemDominio(bruto as DocumentData, dia.id)
       doDia.set(item.id, { item, fonte: 'existente' })
     }
     plano.dias.set(dia.id, doDia)
@@ -735,25 +879,28 @@ function escritasDosDias(db: Firestore, canonico: string, plano: PlanoMigracao, 
 // Pontos e verificação
 // ---------------------------------------------------------------------------
 
-function somarPorMembro(entradas: Array<{ membro?: string; pontos: number }>): Map<string, number> {
+/** ESPELHO de `somarPorMembro` no adapter: o placar é a soma das marcas de cada pessoa. */
+function somarPorMembro(marcas: ItemCompletion[]): Map<string, number> {
   const soma = new Map<string, number>()
-  for (const entrada of entradas) {
-    if (!entrada.membro || entrada.pontos <= 0) continue
-    soma.set(entrada.membro, (soma.get(entrada.membro) ?? 0) + entrada.pontos)
+  for (const marca of marcas) {
+    if (marca.points > 0) soma.set(marca.memberId, (soma.get(marca.memberId) ?? 0) + marca.points)
   }
   return soma
 }
 
+/**
+ * Sem filtro de status: item `parcial` já rendeu pontos a quem marcou, e todo item
+ * pendente tem `completions` vazio — não há o que somar.
+ */
 function pontosDosDias(dias: PlanoDias, filtro?: (data: IsoDate, item: DayItem) => boolean): Map<string, number> {
-  const entradas: Array<{ membro?: string; pontos: number }> = []
+  const marcas: ItemCompletion[] = []
   for (const [data, doDia] of dias) {
     for (const { item } of doDia.values()) {
-      if (item.status !== 'concluida') continue
       if (filtro && !filtro(data, item)) continue
-      entradas.push({ membro: item.completedBy, pontos: item.pointsEarned ?? item.points })
+      marcas.push(...item.completions)
     }
   }
-  return somarPorMembro(entradas)
+  return somarPorMembro(marcas)
 }
 
 function membrosEnvolvidos(...mapas: Map<string, number>[]): string[] {
@@ -772,13 +919,14 @@ function verificar(plano: PlanoMigracao, dias: PlanoDias, relido: boolean, orige
   titulo(`Verificação obrigatória ${relido ? '(dias relidos do Firestore)' : '(simulação do dry-run)'}`)
   imprimirContagens(plano, origem, vivos.length, ausentes.length)
 
+  const okMarcas = conferirMarcas(vivos, dias)
   const okPontos = conferirPontos(vivos, dias, idsVivos)
   if (ausentes.length > 0) {
     console.log('\n  Ausentes:')
     for (const item of ausentes.slice(0, 20)) console.log(`    - ${item.rotulo} (esperado em ${item.data})`)
     if (ausentes.length > 20) console.log(`    ... e mais ${ausentes.length - 20}`)
   }
-  return ausentes.length === 0 && okPontos && plano.naoMigrados.length === 0
+  return ausentes.length === 0 && okMarcas && okPontos && plano.naoMigrados.length === 0
 }
 
 /** Contagens ANTES (origem crua) × DEPOIS (itens migrados), como pede o passo 7. */
@@ -799,8 +947,31 @@ function imprimirContagens(plano: PlanoMigracao, origem: Origem, vivos: number, 
   console.log(`  itens ausentes no destino ............... ${ausentes}`)
 }
 
+/**
+ * Conta as marcas que sobreviveram, item a item. Necessário porque o placar sozinho
+ * não vê conclusão que valia 0 ponto (tarefa de adulto): ela sumiria em silêncio.
+ */
+function conferirMarcas(vivos: Esperado[], dias: PlanoDias): boolean {
+  const divergentes = vivos.filter(
+    (e) => (dias.get(e.data)?.get(e.id)?.item.completions.length ?? 0) !== e.marcas.length,
+  )
+  const esperadas = vivos.reduce((soma, e) => soma + e.marcas.length, 0)
+  const apuradas = vivos.reduce(
+    (soma, e) => soma + (dias.get(e.data)?.get(e.id)?.item.completions.length ?? 0),
+    0,
+  )
+
+  console.log(`\n  Marcas de conclusão (origem × destino): ${esperadas} × ${apuradas}`)
+  for (const e of divergentes.slice(0, 20)) {
+    const achadas = dias.get(e.data)?.get(e.id)?.item.completions.length ?? 0
+    console.log(`    DIVERGE ${e.rotulo} em ${e.data}: esperava ${e.marcas.length}, achei ${achadas}`)
+  }
+  if (divergentes.length > 20) console.log(`    ... e mais ${divergentes.length - 20}`)
+  return divergentes.length === 0
+}
+
 function conferirPontos(vivos: Esperado[], dias: PlanoDias, idsVivos: Set<string>): boolean {
-  const esperado = somarPorMembro(vivos.filter((e) => e.concluido))
+  const esperado = somarPorMembro(vivos.flatMap((e) => e.marcas))
   const apurado = pontosDosDias(dias, (data, item) => idsVivos.has(chaveItem(data, item.id)))
 
   console.log('\n  Pontos por membro (esperado da origem × apurado no destino):')
@@ -838,7 +1009,7 @@ function imprimirPlano(templates: PlanoTemplates, plano: PlanoMigracao, canonico
   const completar = templates.planos.filter((p) => p.acao === 'completar')
   console.log(`  members ..................... ${MEMBROS.length} docs (seed, merge)`)
   console.log(`  task_templates a criar ...... ${criar.length}`)
-  console.log(`  task_templates a completar .. ${completar.length} (só audience/days_of_week)`)
+  console.log(`  task_templates a completar .. ${completar.length} (só audience/completion_mode/days_of_week)`)
   console.log(`  task_templates já prontos ... ${templates.planos.length - criar.length - completar.length}`)
   console.log(`  nomes duplicados unificados . ${templates.duplicados.length}`)
   console.log(`  docs days a gravar .......... ${plano.diasAlterados.size} (de ${plano.dias.size} dias no total)`)
