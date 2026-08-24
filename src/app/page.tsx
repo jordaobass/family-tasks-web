@@ -203,8 +203,6 @@ export default function PainelDaFamilia() {
   // `parcial` fica em Para Fazer de propósito: ainda falta alguém.
   const pendentes = itensDaAba.filter((item) => item.status !== 'concluida')
   const concluidos = itensDaAba.filter((item) => item.status === 'concluida')
-  const membroSelecionado = membrosDaAba.find((membro) => membro.id === membroSelecionadoId) ?? null
-
   useDesaparecerDepois(comemoradoEm, DURACAO_COMEMORACAO_MS, () => setComemoradoEm(null))
   useDesaparecerDepois(aviso, DURACAO_AVISO_MS, () => setAviso(null))
 
@@ -834,13 +832,11 @@ function ModalQuemFez({
   const varios = item.completionMode === 'cada_um'
 
   const alternar = (id: string) =>
-    setEscolhidos((atuais) =>
-      atuais.includes(id)
-        ? atuais.filter((x) => x !== id)
-        : varios
-          ? [...atuais, id]
-          : [id],
-    )
+    setEscolhidos((atuais) => {
+      if (atuais.includes(id)) return atuais.filter((x) => x !== id)
+      // Em "basta um", escolher outra pessoa substitui a anterior.
+      return varios ? [...atuais, id] : [id]
+    })
 
   return (
     <Dialog open onOpenChange={(aberto) => !aberto && aoFechar()}>

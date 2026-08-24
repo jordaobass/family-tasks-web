@@ -110,6 +110,42 @@ function paraIsoDateTime(valor: unknown): IsoDateTime | undefined {
   return undefined
 }
 
+/**
+ * Marcas do item. O formato novo traz `completions`; o antigo trazia UMA
+ * conclusão por item, que é convertida aqui para o histórico não se perder.
+ */
+function lerMarcas(bruto: DocumentData, pontos: number): ItemCompletion[] {
+  if (Array.isArray(bruto.completions)) {
+    return bruto.completions.map((c: DocumentData) => ({
+      memberId: String(c.member_id),
+      memberName: String(c.member_name ?? c.member_id),
+      at: paraIsoDateTime(c.at) ?? new Date().toISOString(),
+      points: Number(c.points ?? pontos),
+    }))
+  }
+  if (bruto.status !== 'concluida' || !bruto.completed_by) return []
+  return [
+    {
+      memberId: String(bruto.completed_by),
+      memberName: String(bruto.completed_by_name ?? bruto.completed_by),
+      at: paraIsoDateTime(bruto.completed_at) ?? new Date().toISOString(),
+      points: Number(bruto.points_earned ?? pontos),
+    },
+  ]
+}
+
+/**
+ * Padrão para template sem o campo: criança faz a sua, adulto basta um.
+ * É a regra que a casa já seguia antes de existir o interruptor.
+ */
+function lerModo(bruto: DocumentData, pontos: number): CompletionMode {
+  if (bruto.completion_mode === 'cada_um' || bruto.completion_mode === 'basta_um') {
+    return bruto.completion_mode
+  }
+  const publico = bruto.audience ?? (pontos > 0 ? 'crianca' : 'adulto')
+  return publico === 'crianca' ? 'cada_um' : 'basta_um'
+}
+
 /** Deriva o estado a partir das marcas — nunca é lido do banco. */
 function calcularStatus(
   modo: CompletionMode,
@@ -130,23 +166,7 @@ function paraItem(bruto: DocumentData): DayItem {
 
   // Formato novo: lista de marcas. Formato antigo (uma conclusão por item):
   // converte-se na leitura, para o histórico já gravado não se perder.
-  const marcas: ItemCompletion[] = Array.isArray(bruto.completions)
-    ? bruto.completions.map((c: DocumentData) => ({
-        memberId: String(c.member_id),
-        memberName: String(c.member_name ?? c.member_id),
-        at: paraIsoDateTime(c.at) ?? new Date().toISOString(),
-        points: Number(c.points ?? pontos),
-      }))
-    : bruto.status === 'concluida' && bruto.completed_by
-      ? [
-          {
-            memberId: String(bruto.completed_by),
-            memberName: String(bruto.completed_by_name ?? bruto.completed_by),
-            at: paraIsoDateTime(bruto.completed_at) ?? new Date().toISOString(),
-            points: Number(bruto.points_earned ?? pontos),
-          },
-        ]
-      : []
+  const marcas = lerMarcas(bruto, pontos)
 
   const modo: CompletionMode = bruto.completion_mode === 'cada_um' ? 'cada_um' : 'basta_um'
   const esperados: string[] = Array.isArray(bruto.expected_member_ids) ? bruto.expected_member_ids : []
@@ -188,14 +208,7 @@ function paraTemplate(id: string, bruto: DocumentData): TaskTemplate {
     // `audience` só existe a partir do schema v2; para docs antigos, deriva-se do
     // mesmo critério que a tela usava antes (pontos > 0 = criança).
     audience: (bruto.audience as MemberRole) ?? (pontos > 0 ? 'crianca' : 'adulto'),
-    // Padrão para template sem o campo: criança faz a sua, adulto basta um.
-    // É a regra que a casa já seguia antes de existir o interruptor.
-    completionMode:
-      bruto.completion_mode === 'cada_um' || bruto.completion_mode === 'basta_um'
-        ? bruto.completion_mode
-        : ((bruto.audience ?? (pontos > 0 ? 'crianca' : 'adulto')) === 'crianca'
-            ? 'cada_um'
-            : 'basta_um'),
+    completionMode: lerModo(bruto, pontos),
     recurrence: (bruto.recurrence === 'weekly' ? 'weekly' : 'daily') as Recurrence,
     daysOfWeek: Array.isArray(bruto.days_of_week) ? bruto.days_of_week : [0, 1, 2, 3, 4, 5, 6],
     category: bruto.category ?? undefined,
