@@ -81,7 +81,7 @@ export interface FamilyData {
   /** `photo: null` remove a foto; `undefined` deixa a atual como está. */
   updateMember(
     id: string,
-    patch: Partial<Pick<Member, 'name' | 'avatar' | 'colorKey' | 'active' | 'sortOrder'>> & {
+    patch: Partial<Pick<Member, 'name' | 'avatar' | 'role' | 'colorKey' | 'active' | 'sortOrder'>> & {
       photo?: string | null
     },
   ): Promise<void>

@@ -768,7 +768,7 @@ class FirestoreFamilyData implements FamilyData {
 
   async updateMember(
     id: string,
-    patch: Partial<Pick<Member, 'name' | 'avatar' | 'photo' | 'colorKey' | 'active' | 'sortOrder'>>,
+    patch: Partial<Pick<Member, 'name' | 'avatar' | 'photo' | 'role' | 'colorKey' | 'active' | 'sortOrder'>>,
   ): Promise<void> {
     await comErro('Não foi possível atualizar o membro', async () => {
       // `photo: null` no patch apaga a foto; `undefined` deixa como está.
@@ -780,6 +780,7 @@ class FirestoreFamilyData implements FamilyData {
           name: patch.name,
           avatar: patch.avatar,
           photo: apagarFoto ? deleteField() : patch.photo,
+          role: patch.role,
           color_key: patch.colorKey,
           active: patch.active,
           sort_order: patch.sortOrder,

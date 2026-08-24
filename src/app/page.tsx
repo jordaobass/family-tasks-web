@@ -26,8 +26,9 @@ import {
   motion,
   useReducedMotion,
 } from 'framer-motion'
-import { BarChart3, CalendarDays, Check, Plus, RefreshCw, Undo2 } from 'lucide-react'
+import { BarChart3, CalendarDays, Check, Plus, RefreshCw, Undo2, Users } from 'lucide-react'
 
+import { AvatarMembro } from '@/components/common/avatar-membro'
 import { NewTaskModal } from '@/components/tasks/new-task-modal'
 import { Button } from '@/components/ui/button'
 import {
@@ -416,6 +417,9 @@ function Cabecalho({ data }: { data: IsoDate }) {
         <LinkDeNavegacao href="/estatisticas" rotulo="Estatísticas">
           <BarChart3 aria-hidden className="h-5 w-5" />
         </LinkDeNavegacao>
+        <LinkDeNavegacao href="/familia" rotulo="Família">
+          <Users aria-hidden className="h-5 w-5" />
+        </LinkDeNavegacao>
       </div>
       <h1 className="text-4xl font-bold drop-shadow-lg md:text-5xl">🏠 Tarefas da Família</h1>
       <p className="mt-2 text-lg opacity-90 md:text-xl">{formatarDataExtenso(data)}</p>
@@ -550,7 +554,14 @@ function BotaoDeMembro({
         selecionado ? 'scale-105 border-yellow-300 ring-4 ring-yellow-300' : 'border-white/40 opacity-90',
       )}
     >
-      <Retrato membro={membro} tamanho="h-12 w-12" className="border-2 border-white/70" />
+      <AvatarMembro
+        nome={membro.name}
+        emoji={membro.avatar}
+        foto={membro.photo}
+        formato="circulo"
+        className="h-12 w-12"
+        classeEmoji="text-2xl"
+      />
       <span className="text-lg">{membro.name}</span>
       {membro.role === 'crianca' && (
         <span className="rounded-full bg-black/25 px-2 py-0.5 text-sm font-semibold">
@@ -654,7 +665,14 @@ function CartaoPendente({
       <span className="flex w-full items-center gap-2">
         {membro && (
           <span className="flex min-w-0 items-center gap-2">
-            <Retrato membro={membro} tamanho="h-11 w-11" />
+            <AvatarMembro
+        nome={membro.name}
+        emoji={membro.avatar}
+        foto={membro.photo}
+        formato="circulo"
+        className="h-11 w-11"
+        classeEmoji="text-2xl"
+      />
             <span className="truncate text-lg font-bold text-gray-800">{membro.name}</span>
           </span>
         )}
@@ -714,48 +732,6 @@ function CartaoConcluido({
         </button>
       </span>
     </div>
-  )
-}
-
-/**
- * Foto quando existe, emoji quando não. Para a criança que ainda não lê, a
- * própria cara é o identificador mais forte que existe — mais que qualquer
- * emoji ou nome escrito.
- *
- * `<img>` e não `next/image` de propósito: a foto é um data URI embutido no
- * documento do membro, e o otimizador do Next não processa data URI.
- */
-function Retrato({
-  membro,
-  tamanho,
-  className,
-}: {
-  membro: Pick<Member, 'name' | 'avatar' | 'photo'>
-  /** Classe de tamanho, ex.: `h-16 w-16`. */
-  tamanho: string
-  className?: string
-}) {
-  if (membro.photo) {
-    return (
-      // eslint-disable-next-line @next/next/no-img-element
-      <img
-        src={membro.photo}
-        alt={membro.name}
-        className={cn(tamanho, 'shrink-0 rounded-full object-cover shadow-sm', className)}
-      />
-    )
-  }
-  return (
-    <span
-      aria-hidden
-      className={cn(
-        tamanho,
-        'flex shrink-0 items-center justify-center rounded-full bg-gray-100 text-[2em] leading-none',
-        className,
-      )}
-    >
-      {membro.avatar}
-    </span>
   )
 }
 
@@ -953,10 +929,13 @@ function ModalQuemFez({
                   )}
                 >
                   <span className="relative">
-                    <Retrato
-                      membro={membro}
-                      tamanho="h-24 w-24"
-                      className={cn(marca && 'opacity-60')}
+                    <AvatarMembro
+                      nome={membro.name}
+                      emoji={membro.avatar}
+                      foto={membro.photo}
+                      formato="circulo"
+                      className={cn('h-24 w-24', marca && 'opacity-60')}
+                      classeEmoji="text-5xl"
                     />
                     {(marca || escolhido) && (
                       <span
