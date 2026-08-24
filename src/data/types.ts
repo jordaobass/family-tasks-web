@@ -17,8 +17,26 @@ export type Unsubscribe = () => void
 
 export type MemberRole = 'crianca' | 'adulto'
 export type Recurrence = 'daily' | 'weekly'
-export type ItemStatus = 'pendente' | 'concluida'
 export type Difficulty = 'easy' | 'medium' | 'hard'
+
+/**
+ * Quem precisa fazer a tarefa para ela contar como pronta.
+ * `cada_um`: toda criança escova os próprios dentes — cada uma marca a sua e
+ * cada uma ganha os pontos. `basta_um`: quem lavou a louça, lavou.
+ */
+export type CompletionMode = 'cada_um' | 'basta_um'
+
+/** `parcial` só existe em `cada_um`: alguém já fez, mas ainda falta gente. */
+export type ItemStatus = 'pendente' | 'parcial' | 'concluida'
+
+/** Uma marca de conclusão. Um item pode ter várias, uma por pessoa. */
+export interface ItemCompletion {
+  memberId: string
+  memberName: string
+  at: IsoDateTime
+  /** Pontos congelados no momento da marca. */
+  points: number
+}
 
 export interface Member {
   id: string
@@ -38,6 +56,7 @@ export interface TaskTemplate {
   icon: string
   points: number
   audience: MemberRole
+  completionMode: CompletionMode
   recurrence: Recurrence
   /** 0=domingo .. 6=sábado. Relevante quando `recurrence === 'weekly'`. */
   daysOfWeek: number[]
@@ -65,12 +84,17 @@ export interface DayItem {
   category?: string
   difficulty?: Difficulty
   estimatedTime?: number
+  completionMode: CompletionMode
+  /**
+   * Quem se espera que faça, capturado na geração do dia. É snapshot de
+   * propósito: entrar um membro novo amanhã não muda o que ontem cobrava.
+   * Vazio quando `completionMode === 'basta_um'`.
+   */
+  expectedMemberIds: string[]
+  /** Uma entrada por pessoa que marcou. */
+  completions: ItemCompletion[]
+  /** Derivado de `completions` e `expectedMemberIds` — nunca gravado. */
   status: ItemStatus
-  completedBy?: string
-  completedByName?: string
-  completedAt?: IsoDateTime
-  /** Pontos congelados na conclusão — imunes a edição posterior do template. */
-  pointsEarned?: number
 }
 
 export interface Day {
@@ -85,6 +109,7 @@ export interface NewTemplateInput {
   icon: string
   points: number
   audience: MemberRole
+  completionMode: CompletionMode
   recurrence: Recurrence
   daysOfWeek?: number[]
   category?: string
@@ -97,6 +122,7 @@ export interface NewOneOffItemInput {
   icon: string
   points: number
   audience: MemberRole
+  completionMode?: CompletionMode
   category?: string
 }
 

@@ -7,12 +7,14 @@
  */
 
 export type {
+  CompletionMode,
   Day,
   DayItem,
   DataErrorCode,
   Difficulty,
   IsoDate,
   IsoDateTime,
+  ItemCompletion,
   ItemStatus,
   Member,
   MemberRole,

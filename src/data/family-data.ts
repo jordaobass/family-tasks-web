@@ -43,11 +43,18 @@ export interface FamilyData {
     onError?: (err: DataError) => void,
   ): Unsubscribe
 
-  /** Conclui o item e credita os pontos ao membro, atomicamente. */
-  completeItem(date: IsoDate, itemId: string, memberId: string): Promise<void>
+  /**
+   * Marca o item como feito por um ou mais membros de uma vez, creditando os
+   * pontos de cada um, tudo numa transação. Marcar de novo quem já marcou é
+   * silenciosamente ignorado — não credita em dobro.
+   */
+  completeItem(date: IsoDate, itemId: string, memberIds: string[]): Promise<void>
 
-  /** Devolve o item para pendente e estorna os pontos, atomicamente. */
-  uncompleteItem(date: IsoDate, itemId: string): Promise<void>
+  /**
+   * Desfaz a marca e estorna os pontos, atomicamente.
+   * Sem `memberId`, desfaz de todo mundo que tinha marcado.
+   */
+  uncompleteItem(date: IsoDate, itemId: string, memberId?: string): Promise<void>
 
   /** Zera o dia inteiro e estorna os pontos de todos os membros, atomicamente. */
   resetDay(date: IsoDate): Promise<void>

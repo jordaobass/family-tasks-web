@@ -35,12 +35,15 @@ import { diaDaSemanaDaData } from './date'
 import type { FamilyData } from './family-data'
 import {
   DataError,
+  type CompletionMode,
   type DataErrorCode,
   type Day,
   type DayItem,
   type Difficulty,
   type IsoDate,
   type IsoDateTime,
+  type ItemCompletion,
+  type ItemStatus,
   type Member,
   type MemberRole,
   type NewOneOffItemInput,
@@ -107,22 +110,61 @@ function paraIsoDateTime(valor: unknown): IsoDateTime | undefined {
   return undefined
 }
 
+/** Deriva o estado a partir das marcas — nunca é lido do banco. */
+function calcularStatus(
+  modo: CompletionMode,
+  esperados: string[],
+  marcas: ItemCompletion[],
+): ItemStatus {
+  if (marcas.length === 0) return 'pendente'
+  if (modo === 'basta_um') return 'concluida'
+  const feitos = new Set(marcas.map((m) => m.memberId))
+  const faltando = esperados.filter((id) => !feitos.has(id))
+  // Sem lista de esperados, uma marca já basta — é o que o dado antigo permite afirmar.
+  if (esperados.length === 0) return 'concluida'
+  return faltando.length === 0 ? 'concluida' : 'parcial'
+}
+
 function paraItem(bruto: DocumentData): DayItem {
+  const pontos = Number(bruto.points ?? 0)
+
+  // Formato novo: lista de marcas. Formato antigo (uma conclusão por item):
+  // converte-se na leitura, para o histórico já gravado não se perder.
+  const marcas: ItemCompletion[] = Array.isArray(bruto.completions)
+    ? bruto.completions.map((c: DocumentData) => ({
+        memberId: String(c.member_id),
+        memberName: String(c.member_name ?? c.member_id),
+        at: paraIsoDateTime(c.at) ?? new Date().toISOString(),
+        points: Number(c.points ?? pontos),
+      }))
+    : bruto.status === 'concluida' && bruto.completed_by
+      ? [
+          {
+            memberId: String(bruto.completed_by),
+            memberName: String(bruto.completed_by_name ?? bruto.completed_by),
+            at: paraIsoDateTime(bruto.completed_at) ?? new Date().toISOString(),
+            points: Number(bruto.points_earned ?? pontos),
+          },
+        ]
+      : []
+
+  const modo: CompletionMode = bruto.completion_mode === 'cada_um' ? 'cada_um' : 'basta_um'
+  const esperados: string[] = Array.isArray(bruto.expected_member_ids) ? bruto.expected_member_ids : []
+
   return {
     id: String(bruto.id),
     templateId: bruto.template_id ?? null,
     name: String(bruto.name ?? ''),
     icon: String(bruto.icon ?? '📋'),
-    points: Number(bruto.points ?? 0),
+    points: pontos,
     audience: (bruto.audience as MemberRole) ?? 'adulto',
     category: bruto.category ?? undefined,
     difficulty: (bruto.difficulty as Difficulty) ?? undefined,
     estimatedTime: bruto.estimated_time ?? undefined,
-    status: bruto.status === 'concluida' ? 'concluida' : 'pendente',
-    completedBy: bruto.completed_by ?? undefined,
-    completedByName: bruto.completed_by_name ?? undefined,
-    completedAt: paraIsoDateTime(bruto.completed_at),
-    pointsEarned: bruto.points_earned ?? undefined,
+    completionMode: modo,
+    expectedMemberIds: esperados,
+    completions: marcas,
+    status: calcularStatus(modo, esperados, marcas),
   }
 }
 
@@ -146,6 +188,14 @@ function paraTemplate(id: string, bruto: DocumentData): TaskTemplate {
     // `audience` só existe a partir do schema v2; para docs antigos, deriva-se do
     // mesmo critério que a tela usava antes (pontos > 0 = criança).
     audience: (bruto.audience as MemberRole) ?? (pontos > 0 ? 'crianca' : 'adulto'),
+    // Padrão para template sem o campo: criança faz a sua, adulto basta um.
+    // É a regra que a casa já seguia antes de existir o interruptor.
+    completionMode:
+      bruto.completion_mode === 'cada_um' || bruto.completion_mode === 'basta_um'
+        ? bruto.completion_mode
+        : ((bruto.audience ?? (pontos > 0 ? 'crianca' : 'adulto')) === 'crianca'
+            ? 'cada_um'
+            : 'basta_um'),
     recurrence: (bruto.recurrence === 'weekly' ? 'weekly' : 'daily') as Recurrence,
     daysOfWeek: Array.isArray(bruto.days_of_week) ? bruto.days_of_week : [0, 1, 2, 3, 4, 5, 6],
     category: bruto.category ?? undefined,
@@ -171,6 +221,15 @@ function paraMembro(id: string, bruto: DocumentData): Member {
   }
 }
 
+/** Agrupa pontos por membro, para estornar tudo de uma pessoa numa escrita só. */
+function somarPorMembro(marcas: ItemCompletion[]): Map<string, number> {
+  const soma = new Map<string, number>()
+  for (const m of marcas) {
+    if (m.points > 0) soma.set(m.memberId, (soma.get(m.memberId) ?? 0) + m.points)
+  }
+  return soma
+}
+
 /** Firestore rejeita `undefined`; este helper remove as chaves ausentes. */
 function semUndefined<T extends Record<string, unknown>>(objeto: T): Record<string, unknown> {
   const saida: Record<string, unknown> = {}
@@ -191,13 +250,18 @@ function itemParaFirestore(item: DayItem): Record<string, unknown> {
     category: item.category,
     difficulty: item.difficulty,
     estimated_time: item.estimatedTime,
-    status: item.status,
-    completed_by: item.completedBy,
-    completed_by_name: item.completedByName,
-    // ATENÇÃO: `serverTimestamp()` é proibido dentro de array no Firestore.
-    // Dentro de `items` o instante vem do cliente, por obrigação do banco.
-    completed_at: item.completedAt ? Timestamp.fromDate(new Date(item.completedAt)) : undefined,
-    points_earned: item.pointsEarned,
+    completion_mode: item.completionMode,
+    expected_member_ids: item.expectedMemberIds,
+    // `status` NÃO é gravado: é derivado das marcas na leitura. Gravar um
+    // derivado é criar duas fontes de verdade que um dia discordam.
+    completions: item.completions.map((c) => ({
+      member_id: c.memberId,
+      member_name: c.memberName,
+      // ATENÇÃO: `serverTimestamp()` é proibido dentro de array no Firestore.
+      // Dentro de `items` o instante vem do cliente, por obrigação do banco.
+      at: Timestamp.fromDate(new Date(c.at)),
+      points: c.points,
+    })),
   })
 }
 
@@ -294,6 +358,12 @@ class FirestoreFamilyData implements FamilyData {
         }
       }
 
+      // Quem se espera que faça é congelado agora: quem entrar na família
+      // amanhã não passa a dever a tarefa de hoje.
+      const membros = await this.listMembers()
+      const esperadosPorPapel = (papel: MemberRole) =>
+        membros.filter((m) => m.active && m.role === papel).map((m) => m.id)
+
       const itens: DayItem[] = elegiveis.map((t) => ({
         id: t.id,
         templateId: t.id,
@@ -304,6 +374,9 @@ class FirestoreFamilyData implements FamilyData {
         category: t.category,
         difficulty: t.difficulty,
         estimatedTime: t.estimatedTime,
+        completionMode: t.completionMode,
+        expectedMemberIds: t.completionMode === 'cada_um' ? esperadosPorPapel(t.audience) : [],
+        completions: [],
         status: 'pendente',
       }))
 
@@ -344,10 +417,14 @@ class FirestoreFamilyData implements FamilyData {
     )
   }
 
-  async completeItem(date: IsoDate, itemId: string, memberId: string): Promise<void> {
-    await comErro('Não foi possível concluir a tarefa', async () => {
+  async completeItem(date: IsoDate, itemId: string, memberIds: string[]): Promise<void> {
+    const alvos = [...new Set(memberIds.filter(Boolean))]
+    if (alvos.length === 0) {
+      throw new DataError('invalido', 'Escolha pelo menos uma pessoa para marcar a tarefa')
+    }
+
+    await comErro('Não foi possível marcar a tarefa', async () => {
       const refDia = this.refDia(date)
-      const refMembro = this.refMembro(memberId)
 
       await runTransaction(this.banco, async (tx) => {
         // Toda leitura vem antes de toda escrita — exigência do Firestore.
@@ -355,42 +432,48 @@ class FirestoreFamilyData implements FamilyData {
         if (!snapDia.exists()) {
           throw new DataError('nao_encontrado', `O dia ${date} ainda não foi gerado`)
         }
-        const snapMembro = await tx.get(refMembro)
+        const snapsMembros = await Promise.all(alvos.map((id) => tx.get(this.refMembro(id))))
 
         const dia = paraDia(snapDia.data(), date)
         const item = dia.items.find((i) => i.id === itemId)
         if (!item) {
           throw new DataError('nao_encontrado', 'Tarefa não encontrada neste dia')
         }
-        // Idempotente: concluir o que já está concluído não credita pontos de novo.
-        if (item.status === 'concluida') return
 
-        const nomeMembro = snapMembro.exists() ? String(snapMembro.data().name ?? memberId) : memberId
-        const pontos = item.points
+        const jaMarcaram = new Set(item.completions.map((c) => c.memberId))
+        const novos = alvos.filter((id) => !jaMarcaram.has(id))
+        // Idempotente: quem já marcou não credita de novo.
+        if (novos.length === 0) return
+        // `basta_um` aceita uma marca só; a primeira que chegar encerra o item.
+        if (item.completionMode === 'basta_um' && jaMarcaram.size > 0) return
+
+        const agora = new Date().toISOString()
+        const marcasNovas: ItemCompletion[] = novos.map((id) => {
+          const snap = snapsMembros[alvos.indexOf(id)]
+          return {
+            memberId: id,
+            memberName: snap.exists() ? String(snap.data().name ?? id) : id,
+            at: agora,
+            points: item.points,
+          }
+        })
 
         const itensAtualizados = dia.items.map((i) =>
-          i.id === itemId
-            ? {
-                ...i,
-                status: 'concluida' as const,
-                completedBy: memberId,
-                completedByName: nomeMembro,
-                completedAt: new Date().toISOString(),
-                pointsEarned: pontos,
-              }
-            : i,
+          i.id === itemId ? { ...i, completions: [...i.completions, ...marcasNovas] } : i,
         )
 
         tx.update(refDia, { items: itensAtualizados.map(itemParaFirestore) })
-        if (pontos > 0) {
-          tx.set(refMembro, { points_total: increment(pontos) }, { merge: true })
+        for (const marca of marcasNovas) {
+          if (marca.points > 0) {
+            tx.set(this.refMembro(marca.memberId), { points_total: increment(marca.points) }, { merge: true })
+          }
         }
       })
     })
   }
 
-  async uncompleteItem(date: IsoDate, itemId: string): Promise<void> {
-    await comErro('Não foi possível desfazer a conclusão', async () => {
+  async uncompleteItem(date: IsoDate, itemId: string, memberId?: string): Promise<void> {
+    await comErro('Não foi possível desfazer a marca', async () => {
       const refDia = this.refDia(date)
 
       await runTransaction(this.banco, async (tx) => {
@@ -404,31 +487,21 @@ class FirestoreFamilyData implements FamilyData {
         if (!item) {
           throw new DataError('nao_encontrado', 'Tarefa não encontrada neste dia')
         }
-        if (item.status === 'pendente') return
 
-        const membroAnterior = item.completedBy
-        const pontosEstorno = item.pointsEarned ?? item.points
+        // Sem memberId, desfaz de todo mundo.
+        const removidas = memberId
+          ? item.completions.filter((c) => c.memberId === memberId)
+          : item.completions
+        if (removidas.length === 0) return
 
+        const restantes = item.completions.filter((c) => !removidas.includes(c))
         const itensAtualizados = dia.items.map((i) =>
-          i.id === itemId
-            ? {
-                ...i,
-                status: 'pendente' as const,
-                completedBy: undefined,
-                completedByName: undefined,
-                completedAt: undefined,
-                pointsEarned: undefined,
-              }
-            : i,
+          i.id === itemId ? { ...i, completions: restantes } : i,
         )
 
         tx.update(refDia, { items: itensAtualizados.map(itemParaFirestore) })
-        if (membroAnterior && pontosEstorno > 0) {
-          tx.set(
-            this.refMembro(membroAnterior),
-            { points_total: increment(-pontosEstorno) },
-            { merge: true },
-          )
+        for (const [membro, pontos] of somarPorMembro(removidas)) {
+          tx.set(this.refMembro(membro), { points_total: increment(-pontos) }, { merge: true })
         }
       })
     })
@@ -443,26 +516,12 @@ class FirestoreFamilyData implements FamilyData {
         if (!snapDia.exists()) return
 
         const dia = paraDia(snapDia.data(), date)
-        const estornoPorMembro = new Map<string, number>()
-
-        for (const item of dia.items) {
-          if (item.status !== 'concluida' || !item.completedBy) continue
-          const pontos = item.pointsEarned ?? item.points
-          if (pontos > 0) {
-            estornoPorMembro.set(
-              item.completedBy,
-              (estornoPorMembro.get(item.completedBy) ?? 0) + pontos,
-            )
-          }
-        }
+        const estornoPorMembro = somarPorMembro(dia.items.flatMap((i) => i.completions))
 
         const itensZerados = dia.items.map((i) => ({
           ...i,
+          completions: [],
           status: 'pendente' as const,
-          completedBy: undefined,
-          completedByName: undefined,
-          completedAt: undefined,
-          pointsEarned: undefined,
         }))
 
         tx.update(refDia, { items: itensZerados.map(itemParaFirestore) })
@@ -475,6 +534,10 @@ class FirestoreFamilyData implements FamilyData {
 
   async addOneOffItem(date: IsoDate, input: NewOneOffItemInput): Promise<DayItem> {
     return comErro('Não foi possível adicionar a tarefa', async () => {
+      const modo: CompletionMode =
+        input.completionMode ?? (input.audience === 'crianca' ? 'cada_um' : 'basta_um')
+      const membros = modo === 'cada_um' ? await this.listMembers() : []
+
       const novo: DayItem = {
         id: `avulsa_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         templateId: null,
@@ -483,6 +546,11 @@ class FirestoreFamilyData implements FamilyData {
         points: input.points,
         audience: input.audience,
         category: input.category,
+        completionMode: modo,
+        expectedMemberIds: membros
+          .filter((m) => m.active && m.role === input.audience)
+          .map((m) => m.id),
+        completions: [],
         status: 'pendente',
       }
 
@@ -511,16 +579,9 @@ class FirestoreFamilyData implements FamilyData {
 
         const dia = paraDia(snapDia.data(), date)
         const item = dia.items.find((i) => i.id === itemId)
-        // Remover item concluído estorna os pontos, senão o placar fica inflado.
-        if (item?.status === 'concluida' && item.completedBy) {
-          const pontos = item.pointsEarned ?? item.points
-          if (pontos > 0) {
-            tx.set(
-              this.refMembro(item.completedBy),
-              { points_total: increment(-pontos) },
-              { merge: true },
-            )
-          }
+        // Remover item já marcado estorna os pontos, senão o placar fica inflado.
+        for (const [membro, pontos] of somarPorMembro(item?.completions ?? [])) {
+          tx.set(this.refMembro(membro), { points_total: increment(-pontos) }, { merge: true })
         }
 
         tx.update(refDia, {
@@ -559,6 +620,7 @@ class FirestoreFamilyData implements FamilyData {
           icon: input.icon,
           points: input.points,
           audience: input.audience,
+          completion_mode: input.completionMode,
           recurrence: input.recurrence,
           days_of_week: input.daysOfWeek ?? [0, 1, 2, 3, 4, 5, 6],
           category: input.category,
@@ -578,6 +640,7 @@ class FirestoreFamilyData implements FamilyData {
         icon: input.icon,
         points: input.points,
         audience: input.audience,
+        completionMode: input.completionMode,
         recurrence: input.recurrence,
         daysOfWeek: input.daysOfWeek ?? [0, 1, 2, 3, 4, 5, 6],
         category: input.category,
@@ -600,6 +663,7 @@ class FirestoreFamilyData implements FamilyData {
           icon: patch.icon,
           points: patch.points,
           audience: patch.audience,
+          completion_mode: patch.completionMode,
           recurrence: patch.recurrence,
           days_of_week: patch.daysOfWeek,
           category: patch.category,
@@ -717,6 +781,9 @@ class FirestoreFamilyData implements FamilyData {
     const itens = dias.flatMap((d) => d.items)
 
     const concluidos = itens.filter((i) => i.status === 'concluida')
+    // Uma tarefa que cada criança faz a sua vale UMA marca por criança: contar
+    // itens esconderia metade do esforço.
+    const marcas = itens.flatMap((i) => i.completions)
     const byCategory: Record<string, number> = {}
     const byMember: Record<string, { count: number; points: number }> = {}
 
@@ -726,13 +793,9 @@ class FirestoreFamilyData implements FamilyData {
       }
     }
 
-    for (const item of concluidos) {
-      if (!item.completedBy) continue
-      const atual = byMember[item.completedBy] ?? { count: 0, points: 0 }
-      byMember[item.completedBy] = {
-        count: atual.count + 1,
-        points: atual.points + (item.pointsEarned ?? item.points),
-      }
+    for (const marca of marcas) {
+      const atual = byMember[marca.memberId] ?? { count: 0, points: 0 }
+      byMember[marca.memberId] = { count: atual.count + 1, points: atual.points + marca.points }
     }
 
     return {
@@ -740,7 +803,7 @@ class FirestoreFamilyData implements FamilyData {
       completedItems: concluidos.length,
       pendingItems: itens.length - concluidos.length,
       completionRate: itens.length > 0 ? Math.round((concluidos.length / itens.length) * 100) : 0,
-      pointsEarned: concluidos.reduce((soma, i) => soma + (i.pointsEarned ?? i.points), 0),
+      pointsEarned: marcas.reduce((soma, m) => soma + m.points, 0),
       byCategory,
       byMember,
     }
