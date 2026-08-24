@@ -34,6 +34,75 @@ import {
 /** De quanto em quanto tempo o painel confere se a data virou. */
 const INTERVALO_RELOGIO_MS = 60_000
 
+/**
+ * Uma mudança que a tela já mostra antes do banco confirmar.
+ *
+ * Por que existe: `runTransaction` do Firestore **não tem compensação de
+ * latência**. Um `updateDoc` comum aparece no `onSnapshot` local no mesmo
+ * instante; a transação só aparece depois do servidor responder — medido em
+ * 2,3 s no aparelho de casa. Como a atomicidade da transação é o que impede o
+ * placar de divergir, mantém-se a transação e prevê-se o resultado aqui.
+ *
+ * A previsão morre quando o snapshot chega refletindo-a, ou na hora se a
+ * escrita falhar.
+ */
+interface Previsao {
+  itemId: string
+  membros: string[]
+  /** `true` = desmarcar; `undefined`/`false` = marcar. */
+  desmarcar?: boolean
+}
+
+function aplicarPrevisoes(itens: DayItem[], previsoes: Previsao[], membros: Member[]): DayItem[] {
+  if (previsoes.length === 0) return itens
+  const nomeDe = (id: string) => membros.find((m) => m.id === id)?.name ?? id
+
+  return itens.map((item) => {
+    const minhas = previsoes.filter((p) => p.itemId === item.id)
+    if (minhas.length === 0) return item
+
+    let marcas = item.completions
+    for (const p of minhas) {
+      if (p.desmarcar) {
+        marcas = p.membros.length
+          ? marcas.filter((c) => !p.membros.includes(c.memberId))
+          : []
+      } else {
+        const novos = p.membros.filter((id) => !marcas.some((c) => c.memberId === id))
+        marcas = [
+          ...marcas,
+          ...novos.map((id) => ({
+            memberId: id,
+            memberName: nomeDe(id),
+            at: new Date().toISOString(),
+            points: item.points,
+          })),
+        ]
+      }
+    }
+    return { ...item, completions: marcas, status: statusPrevisto(item, marcas) }
+  })
+}
+
+/** Mesma regra do adapter — repetida aqui porque a previsão não passa pelo banco. */
+function statusPrevisto(item: DayItem, marcas: DayItem['completions']): DayItem['status'] {
+  if (marcas.length === 0) return 'pendente'
+  if (item.completionMode === 'basta_um' || item.expectedMemberIds.length === 0) return 'concluida'
+  const feitos = new Set(marcas.map((m) => m.memberId))
+  return item.expectedMemberIds.every((id) => feitos.has(id)) ? 'concluida' : 'parcial'
+}
+
+/** A previsão já apareceu no dado que veio do banco? Então pode ser descartada. */
+function jaRefletida(p: Previsao, dia: Day): boolean {
+  const item = dia.items.find((i) => i.id === p.itemId)
+  if (!item) return true
+  const marcados = new Set(item.completions.map((c) => c.memberId))
+  if (p.desmarcar) {
+    return p.membros.length ? p.membros.every((id) => !marcados.has(id)) : marcados.size === 0
+  }
+  return p.membros.every((id) => marcados.has(id))
+}
+
 export interface PainelDoDia {
   /** Data de hoje no fuso da família — muda sozinha à meia-noite. */
   hoje: IsoDate
@@ -44,9 +113,13 @@ export interface PainelDoDia {
   carregando: boolean
   erro: string | null
   limparErro: () => void
-  /** Todas as ações devolvem `true` só quando a escrita foi confirmada. */
-  concluir: (itemId: string, membroId: string) => Promise<boolean>
-  desfazer: (itemId: string) => Promise<boolean>
+  /**
+   * Todas as ações devolvem `true` só quando a escrita foi confirmada — mas a
+   * TELA não espera por isso: a mudança aparece na hora e é reconciliada com o
+   * listener. Ver `Previsao`.
+   */
+  concluir: (itemId: string, membroIds: string[]) => Promise<boolean>
+  desfazer: (itemId: string, membroId?: string) => Promise<boolean>
   resetar: () => Promise<boolean>
   adicionarAvulsa: (entrada: NewOneOffItemInput) => Promise<boolean>
 }
@@ -58,6 +131,7 @@ export function usePanelDay(): PainelDoDia {
   const [membros, setMembros] = useState<Member[]>([])
   const [carregando, setCarregando] = useState(true)
   const [erro, setErro] = useState<string | null>(null)
+  const [previsoes, setPrevisoes] = useState<Previsao[]>([])
 
   /** Guarda a última data para a qual já pedimos `ensureDay` — trava do laço. */
   const diaGarantido = useRef<IsoDate | null>(null)
@@ -109,6 +183,15 @@ export function usePanelDay(): PainelDoDia {
     return cancelar
   }, [dados, hoje, garantirDia, registrarFalha])
 
+  // Chegou dado do banco: tudo que ele já reflete deixa de ser previsão.
+  useEffect(() => {
+    if (!dia) return
+    setPrevisoes((atuais) => {
+      const restantes = atuais.filter((p) => !jaRefletida(p, dia))
+      return restantes.length === atuais.length ? atuais : restantes
+    })
+  }, [dia])
+
   const executar = useCallback(
     async (contexto: string, acao: () => Promise<unknown>): Promise<boolean> => {
       try {
@@ -123,22 +206,41 @@ export function usePanelDay(): PainelDoDia {
     [registrarFalha],
   )
 
+  /** Mostra já, escreve depois, e retira a previsão se a escrita não vingar. */
+  const comPrevisao = useCallback(
+    async (previsao: Previsao, contexto: string, acao: () => Promise<unknown>) => {
+      setPrevisoes((atuais) => [...atuais, previsao])
+      const ok = await executar(contexto, acao)
+      if (!ok) setPrevisoes((atuais) => atuais.filter((p) => p !== previsao))
+      return ok
+    },
+    [executar],
+  )
+
   const concluir = useCallback(
-    (itemId: string, membroId: string) =>
-      executar('Não consegui concluir a tarefa', () => dados.completeItem(hoje, itemId, membroId)),
-    [dados, hoje, executar],
+    (itemId: string, membroIds: string[]) =>
+      comPrevisao(
+        { itemId, membros: membroIds },
+        'Não consegui marcar a tarefa',
+        () => dados.completeItem(hoje, itemId, membroIds),
+      ),
+    [dados, hoje, comPrevisao],
   )
 
   const desfazer = useCallback(
-    (itemId: string) =>
-      executar('Não consegui desfazer a conclusão', () => dados.uncompleteItem(hoje, itemId)),
-    [dados, hoje, executar],
+    (itemId: string, membroId?: string) =>
+      comPrevisao(
+        { itemId, membros: membroId ? [membroId] : [], desmarcar: true },
+        'Não consegui desfazer a marca',
+        () => dados.uncompleteItem(hoje, itemId, membroId),
+      ),
+    [dados, hoje, comPrevisao],
   )
 
-  const resetar = useCallback(
-    () => executar('Não consegui resetar o dia', () => dados.resetDay(hoje)),
-    [dados, hoje, executar],
-  )
+  const resetar = useCallback(async () => {
+    setPrevisoes([])
+    return executar('Não consegui recomeçar o dia', () => dados.resetDay(hoje))
+  }, [dados, hoje, executar])
 
   const adicionarAvulsa = useCallback(
     (entrada: NewOneOffItemInput) =>
@@ -146,7 +248,10 @@ export function usePanelDay(): PainelDoDia {
     [dados, hoje, executar],
   )
 
-  const itens = useMemo(() => dia?.items ?? [], [dia])
+  const itens = useMemo(
+    () => aplicarPrevisoes(dia?.items ?? [], previsoes, membros),
+    [dia, previsoes, membros],
+  )
 
   return {
     hoje,

@@ -143,10 +143,26 @@ function formatarHora(instante?: string): string | null {
 function somarPontosPorMembro(itens: DayItem[]): Record<string, number> {
   const total: Record<string, number> = {}
   for (const item of itens) {
-    if (item.status !== 'concluida' || !item.completedBy) continue
-    total[item.completedBy] = (total[item.completedBy] ?? 0) + (item.pointsEarned ?? item.points)
+    for (const marca of item.completions) {
+      total[marca.memberId] = (total[marca.memberId] ?? 0) + marca.points
+    }
   }
   return total
+}
+
+/** Quem ainda falta marcar. Vazio quando a tarefa já está pronta. */
+function quemFalta(item: DayItem, membros: Member[]): Member[] {
+  const jaMarcou = new Set(item.completions.map((c) => c.memberId))
+  if (item.completionMode === 'basta_um') {
+    return jaMarcou.size > 0 ? [] : membros.filter((m) => m.role === item.audience)
+  }
+  const esperados = item.expectedMemberIds.length
+    ? item.expectedMemberIds
+    : membros.filter((m) => m.role === item.audience).map((m) => m.id)
+  return esperados
+    .filter((id) => !jaMarcou.has(id))
+    .map((id) => membros.find((m) => m.id === id))
+    .filter((m): m is Member => Boolean(m))
 }
 
 // ---------------------------------------------------------------------------
@@ -169,6 +185,7 @@ export default function PainelDaFamilia() {
   // Guarda o instante da última conclusão (e não um booleano) para que duas
   // tarefas seguidas reiniciem a comemoração em vez de encurtar a segunda.
   const [comemoradoEm, setComemoradoEm] = useState<number | null>(null)
+  const [itemParaMarcar, setItemParaMarcar] = useState<DayItem | null>(null)
   const [modalNovaTarefa, setModalNovaTarefa] = useState(false)
   const [confirmandoReset, setConfirmandoReset] = useState(false)
   const [resetando, setResetando] = useState(false)
@@ -183,7 +200,8 @@ export default function PainelDaFamilia() {
   )
   const pontosDeHoje = useMemo(() => somarPontosPorMembro(painel.itens), [painel.itens])
 
-  const pendentes = itensDaAba.filter((item) => item.status === 'pendente')
+  // `parcial` fica em Para Fazer de propósito: ainda falta alguém.
+  const pendentes = itensDaAba.filter((item) => item.status !== 'concluida')
   const concluidos = itensDaAba.filter((item) => item.status === 'concluida')
   const membroSelecionado = membrosDaAba.find((membro) => membro.id === membroSelecionadoId) ?? null
 
@@ -195,18 +213,17 @@ export default function PainelDaFamilia() {
     setMembroSelecionadoId(null)
   }, [])
 
-  const concluirTarefa = useCallback(
-    async (item: DayItem) => {
-      if (!membroSelecionado) {
-        setAviso({ texto: 'Toque no seu nome primeiro 👆', em: Date.now() })
-        return
-      }
-      const deuCerto = await painel.concluir(item.id, membroSelecionado.id)
-      if (!deuCerto) return
+  const marcarTarefa = useCallback(
+    async (item: DayItem, membroIds: string[]) => {
+      setItemParaMarcar(null)
+      if (membroIds.length === 0) return
+      // Comemora ANTES da confirmação do banco: a previsão do hook já moveu o
+      // cartão, e som que chega três segundos depois do toque não comemora nada.
       setComemoradoEm(Date.now())
       tocarSomDeVitoria()
+      await painel.concluir(item.id, membroIds)
     },
-    [membroSelecionado, painel],
+    [painel],
   )
 
   const confirmarReset = useCallback(async () => {
@@ -252,7 +269,11 @@ export default function PainelDaFamilia() {
                 >
                   {pendentes.map((item) => (
                     <ItemAnimado key={item.id} id={item.id}>
-                      <CartaoPendente item={item} aoConcluir={() => concluirTarefa(item)} />
+                      <CartaoPendente
+                        item={item}
+                        membros={painel.membros}
+                        aoTocar={() => setItemParaMarcar(item)}
+                      />
                     </ItemAnimado>
                   ))}
                 </Coluna>
@@ -265,7 +286,10 @@ export default function PainelDaFamilia() {
                 >
                   {concluidos.map((item) => (
                     <ItemAnimado key={item.id} id={item.id}>
-                      <CartaoConcluido item={item} aoDesfazer={() => painel.desfazer(item.id)} />
+                      <CartaoConcluido
+                        item={item}
+                        aoDesfazer={(membroId) => painel.desfazer(item.id, membroId)}
+                      />
                     </ItemAnimado>
                   ))}
                 </Coluna>
@@ -285,6 +309,14 @@ export default function PainelDaFamilia() {
             </Button>
           </div>
         </div>
+
+        <ModalQuemFez
+          item={itemParaMarcar}
+          membros={painel.membros}
+          preSelecionadoId={membroSelecionadoId}
+          aoFechar={() => setItemParaMarcar(null)}
+          aoConfirmar={marcarTarefa}
+        />
 
         <NewTaskModal
           open={modalNovaTarefa}
@@ -537,23 +569,66 @@ function ItemAnimado({ id, children }: { id: string; children: ReactNode }) {
   )
 }
 
-/** Cartão pendente: o alvo de toque é o cartão inteiro, com 84 px de altura. */
-function CartaoPendente({ item, aoConcluir }: { item: DayItem; aoConcluir: () => void }) {
+/**
+ * Cartão pendente: o alvo de toque é o cartão inteiro, com 84 px de altura.
+ * Quando a tarefa é de "cada um faz a sua", o cartão mostra quem já marcou e
+ * quem falta — é a informação que o pai precisa de relance, sem tocar em nada.
+ */
+function CartaoPendente({
+  item,
+  membros,
+  aoTocar,
+}: {
+  item: DayItem
+  membros: Member[]
+  aoTocar: () => void
+}) {
+  const faltam = quemFalta(item, membros)
+  const parcial = item.status === 'parcial'
+  const rotulo = parcial
+    ? `${item.name} — falta ${faltam.map((m) => m.name).join(' e ')}`
+    : `Marcar ${item.name}`
+
   return (
     <button
       type="button"
-      onClick={aoConcluir}
-      aria-label={`Concluir ${item.name}`}
+      onClick={aoTocar}
+      aria-label={rotulo}
       className={cn(
         'flex min-h-[84px] w-full items-center gap-4 rounded-2xl bg-white p-4 text-left shadow-lg',
         'transition-transform duration-150 active:scale-[0.97] active:bg-green-50',
         'focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-green-400',
+        parcial && 'ring-2 ring-emerald-300',
       )}
     >
       <span aria-hidden className="text-3xl">
         {item.icon}
       </span>
-      <span className="flex-1 text-base font-semibold leading-tight text-gray-900">{item.name}</span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-base font-semibold leading-tight text-gray-900">
+          {item.name}
+        </span>
+        {item.completionMode === 'cada_um' && (
+          <span className="mt-1 flex flex-wrap items-center gap-1.5">
+            {item.completions.map((marca) => (
+              <span
+                key={marca.memberId}
+                className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-800"
+              >
+                {marca.memberName} ✓
+              </span>
+            ))}
+            {faltam.map((membro) => (
+              <span
+                key={membro.id}
+                className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600"
+              >
+                {membro.name} —
+              </span>
+            ))}
+          </span>
+        )}
+      </span>
       <EtiquetaDePontos pontos={item.points} />
       <span
         aria-hidden
@@ -570,28 +645,38 @@ function CartaoPendente({ item, aoConcluir }: { item: DayItem; aoConcluir: () =>
  * separada, com botão próprio — senão o segundo toque de comemoração desfaria
  * a tarefa que a criança acabou de concluir.
  */
-function CartaoConcluido({ item, aoDesfazer }: { item: DayItem; aoDesfazer: () => void }) {
-  const hora = formatarHora(item.completedAt)
-
+function CartaoConcluido({
+  item,
+  aoDesfazer,
+}: {
+  item: DayItem
+  aoDesfazer: (membroId?: string) => void
+}) {
   return (
     <div className="relative flex min-h-[84px] items-center gap-4 rounded-2xl border-2 border-green-200 bg-gradient-to-br from-green-50 to-emerald-50 p-4 shadow-lg">
-      {item.completedByName && (
-        <span className="absolute -top-2 right-3 rounded-full bg-emerald-600 px-2 py-1 text-xs font-bold text-white shadow">
-          {item.completedByName}
-        </span>
-      )}
       <span aria-hidden className="text-3xl">
         {item.icon}
       </span>
       <div className="min-w-0 flex-1">
         <p className="text-base font-semibold leading-tight text-gray-900">{item.name}</p>
-        {hora && <p className="mt-1 text-xs text-gray-500">Concluída às {hora}</p>}
+        <ul className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+          {item.completions.map((marca) => (
+            <li key={marca.memberId} className="text-xs text-gray-600">
+              <span className="font-semibold text-emerald-800">{marca.memberName}</span>
+              {formatarHora(marca.at) && ` às ${formatarHora(marca.at)}`}
+            </li>
+          ))}
+        </ul>
       </div>
-      <EtiquetaDePontos pontos={item.pointsEarned ?? item.points} />
+      <EtiquetaDePontos pontos={item.points} />
       <button
         type="button"
-        onClick={aoDesfazer}
-        aria-label={`Desfazer a conclusão de ${item.name}`}
+        onClick={() => aoDesfazer()}
+        aria-label={
+          item.completions.length > 1
+            ? `Desfazer ${item.name} para todos`
+            : `Desfazer ${item.name}`
+        }
         className="flex h-[60px] w-[60px] shrink-0 items-center justify-center rounded-full bg-white text-gray-600 shadow transition-transform active:scale-90 active:bg-gray-100 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-emerald-400"
       >
         <Undo2 aria-hidden className="h-6 w-6" />
@@ -705,6 +790,134 @@ function DialogoDeReset({
             className="h-14 flex-1 bg-red-600 text-base font-bold text-white hover:bg-red-600 active:scale-[0.98] active:bg-red-700"
           >
             {ocupado ? 'Recomeçando…' : 'Sim, recomeçar'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/**
+ * "Quem fez?" — o modal que abre ao tocar numa tarefa.
+ *
+ * Por que sempre abre, mesmo com alguém já escolhido lá em cima: num painel
+ * compartilhado a seleção fica grudada da criança anterior, e a tarefa acabava
+ * creditada para quem não fez. Aqui a escolha é sempre deliberada, e quem já
+ * marcou aparece desabilitado — é a resposta para "ele já escovou?".
+ */
+function ModalQuemFez({
+  item,
+  membros,
+  preSelecionadoId,
+  aoFechar,
+  aoConfirmar,
+}: {
+  item: DayItem | null
+  membros: Member[]
+  preSelecionadoId: string | null
+  aoFechar: () => void
+  aoConfirmar: (item: DayItem, membroIds: string[]) => void
+}) {
+  const [escolhidos, setEscolhidos] = useState<string[]>([])
+
+  // Reabrir o modal noutra tarefa não pode herdar a escolha da anterior.
+  useEffect(() => {
+    if (!item) return
+    const jaMarcou = new Set(item.completions.map((c) => c.memberId))
+    setEscolhidos(preSelecionadoId && !jaMarcou.has(preSelecionadoId) ? [preSelecionadoId] : [])
+  }, [item, preSelecionadoId])
+
+  if (!item) return null
+
+  const candidatos = membros.filter((m) => m.role === item.audience)
+  const jaMarcou = new Map(item.completions.map((c) => [c.memberId, c] as const))
+  const varios = item.completionMode === 'cada_um'
+
+  const alternar = (id: string) =>
+    setEscolhidos((atuais) =>
+      atuais.includes(id)
+        ? atuais.filter((x) => x !== id)
+        : varios
+          ? [...atuais, id]
+          : [id],
+    )
+
+  return (
+    <Dialog open onOpenChange={(aberto) => !aberto && aoFechar()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="text-xl">
+            <span aria-hidden className="mr-2">
+              {item.icon}
+            </span>
+            Quem fez {item.name}?
+          </DialogTitle>
+          <DialogDescription>
+            {varios
+              ? 'Cada um marca a sua — dá para escolher mais de uma pessoa.'
+              : 'Basta uma pessoa marcar esta tarefa.'}
+          </DialogDescription>
+        </DialogHeader>
+
+        <ul className="grid gap-2">
+          {candidatos.map((membro) => {
+            const marca = jaMarcou.get(membro.id)
+            const escolhido = escolhidos.includes(membro.id)
+            return (
+              <li key={membro.id}>
+                <button
+                  type="button"
+                  disabled={Boolean(marca)}
+                  aria-pressed={escolhido}
+                  onClick={() => alternar(membro.id)}
+                  className={cn(
+                    'flex min-h-[64px] w-full items-center gap-3 rounded-2xl border-2 p-3 text-left transition-colors',
+                    'focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-purple-300',
+                    marca && 'cursor-not-allowed border-emerald-200 bg-emerald-50 opacity-80',
+                    !marca && escolhido && 'border-purple-500 bg-purple-50',
+                    !marca && !escolhido && 'border-gray-200 bg-white active:bg-gray-50',
+                  )}
+                >
+                  <span aria-hidden className="text-3xl">
+                    {membro.avatar}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-base font-bold text-gray-900">{membro.name}</span>
+                    {marca && (
+                      <span className="block text-xs font-medium text-emerald-700">
+                        já marcou{formatarHora(marca.at) ? ` às ${formatarHora(marca.at)}` : ''}
+                      </span>
+                    )}
+                  </span>
+                  {marca ? (
+                    <Check aria-hidden className="h-6 w-6 shrink-0 text-emerald-600" />
+                  ) : (
+                    <span
+                      aria-hidden
+                      className={cn(
+                        'flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2',
+                        escolhido ? 'border-purple-500 bg-purple-500 text-white' : 'border-gray-300',
+                      )}
+                    >
+                      {escolhido && <Check className="h-4 w-4" />}
+                    </span>
+                  )}
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+
+        <DialogFooter className="gap-2 sm:justify-between">
+          <Button variant="ghost" onClick={aoFechar} className="h-12">
+            Cancelar
+          </Button>
+          <Button
+            onClick={() => aoConfirmar(item, escolhidos)}
+            disabled={escolhidos.length === 0}
+            className="h-12 bg-gradient-to-r from-green-500 to-emerald-600 px-6 text-base font-bold text-white hover:bg-transparent active:scale-95"
+          >
+            {escolhidos.length > 1 ? `Marcar para ${escolhidos.length}` : 'Marcar como feita'}
           </Button>
         </DialogFooter>
       </DialogContent>
