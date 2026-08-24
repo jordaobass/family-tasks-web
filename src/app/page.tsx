@@ -150,6 +150,44 @@ function somarPontosPorMembro(itens: DayItem[]): Record<string, number> {
   return total
 }
 
+/** Um cartão da tela. `membro` presente = a tarefa é daquela criança. */
+interface Cartao {
+  chave: string
+  item: DayItem
+  membro?: Member
+  marca?: DayItem['completions'][number]
+}
+
+function expandirPendentes(itens: DayItem[], membros: Member[]): Cartao[] {
+  return itens.flatMap((item) => {
+    if (item.status === 'concluida') return []
+    if (item.completionMode === 'basta_um') {
+      return [{ chave: item.id, item }]
+    }
+    // Um cartão por pessoa que ainda falta.
+    return quemFalta(item, membros).map((membro) => ({
+      chave: `${item.id}:${membro.id}`,
+      item,
+      membro,
+    }))
+  })
+}
+
+function expandirConcluidos(itens: DayItem[]): Cartao[] {
+  return itens.flatMap((item) => {
+    if (item.completionMode === 'basta_um') {
+      return item.status === 'concluida' ? [{ chave: item.id, item }] : []
+    }
+    // Cada marca vira o cartão daquela criança, inclusive enquanto falta a outra:
+    // quem fez merece ver a própria tarefa do lado de lá.
+    return item.completions.map((marca) => ({
+      chave: `${item.id}:${marca.memberId}`,
+      item,
+      marca,
+    }))
+  })
+}
+
 /** Quem ainda falta marcar. Vazio quando a tarefa já está pronta. */
 function quemFalta(item: DayItem, membros: Member[]): Member[] {
   const jaMarcou = new Set(item.completions.map((c) => c.memberId))
@@ -200,9 +238,14 @@ export default function PainelDaFamilia() {
   )
   const pontosDeHoje = useMemo(() => somarPontosPorMembro(painel.itens), [painel.itens])
 
-  // `parcial` fica em Para Fazer de propósito: ainda falta alguém.
-  const pendentes = itensDaAba.filter((item) => item.status !== 'concluida')
-  const concluidos = itensDaAba.filter((item) => item.status === 'concluida')
+  // A unidade da tela é (tarefa × pessoa) quando cada um faz a sua: a criança
+  // toca no cartão DELA, sem precisar ler nome nem abrir modal. Quem já fez sai
+  // da lista e só sobra o cartão de quem falta.
+  const pendentes = useMemo(
+    () => expandirPendentes(itensDaAba, painel.membros),
+    [itensDaAba, painel.membros],
+  )
+  const concluidos = useMemo(() => expandirConcluidos(itensDaAba), [itensDaAba])
   useDesaparecerDepois(comemoradoEm, DURACAO_COMEMORACAO_MS, () => setComemoradoEm(null))
   useDesaparecerDepois(aviso, DURACAO_AVISO_MS, () => setAviso(null))
 
@@ -265,12 +308,16 @@ export default function PainelDaFamilia() {
                   vazio={pendentes.length === 0}
                   textoVazio="Tudo pronto por aqui! 🎉"
                 >
-                  {pendentes.map((item) => (
-                    <ItemAnimado key={item.id} id={item.id}>
+                  {pendentes.map((cartao) => (
+                    <ItemAnimado key={cartao.chave} id={cartao.chave}>
                       <CartaoPendente
-                        item={item}
-                        membros={painel.membros}
-                        aoTocar={() => setItemParaMarcar(item)}
+                        item={cartao.item}
+                        membro={cartao.membro}
+                        aoTocar={() =>
+                          cartao.membro
+                            ? marcarTarefa(cartao.item, [cartao.membro.id])
+                            : setItemParaMarcar(cartao.item)
+                        }
                       />
                     </ItemAnimado>
                   ))}
@@ -282,11 +329,12 @@ export default function PainelDaFamilia() {
                   vazio={concluidos.length === 0}
                   textoVazio="Nenhuma tarefa concluída ainda"
                 >
-                  {concluidos.map((item) => (
-                    <ItemAnimado key={item.id} id={item.id}>
+                  {concluidos.map((cartao) => (
+                    <ItemAnimado key={cartao.chave} id={cartao.chave}>
                       <CartaoConcluido
-                        item={item}
-                        aoDesfazer={(membroId) => painel.desfazer(item.id, membroId)}
+                        item={cartao.item}
+                        marca={cartao.marca}
+                        aoDesfazer={() => painel.desfazer(cartao.item.id, cartao.marca?.memberId)}
                       />
                     </ItemAnimado>
                   ))}
@@ -539,7 +587,9 @@ function Coluna({
             {textoVazio}
           </p>
         )}
-        <ul className="space-y-3">
+        {/* Dois cartões lado a lado: cada criança tem o seu, e o alvo de toque
+            fica largo o bastante para dedo pequeno acertar sem mira. */}
+        <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <AnimatePresence initial={false}>{children}</AnimatePresence>
         </ul>
       </div>
@@ -574,65 +624,50 @@ function ItemAnimado({ id, children }: { id: string; children: ReactNode }) {
  */
 function CartaoPendente({
   item,
-  membros,
+  membro,
   aoTocar,
 }: {
   item: DayItem
-  membros: Member[]
+  /** Presente quando o cartão é de uma criança específica. */
+  membro?: Member
   aoTocar: () => void
 }) {
-  const faltam = quemFalta(item, membros)
-  const parcial = item.status === 'parcial'
-  const rotulo = parcial
-    ? `${item.name} — falta ${faltam.map((m) => m.name).join(' e ')}`
-    : `Marcar ${item.name}`
-
   return (
     <button
       type="button"
       onClick={aoTocar}
-      aria-label={rotulo}
+      aria-label={membro ? `${item.name} — ${membro.name}` : `Marcar ${item.name}`}
       className={cn(
-        'flex min-h-[84px] w-full items-center gap-4 rounded-2xl bg-white p-4 text-left shadow-lg',
+        'flex min-h-[128px] w-full flex-col items-start gap-2 rounded-2xl bg-white p-4 text-left shadow-lg',
         'transition-transform duration-150 active:scale-[0.97] active:bg-green-50',
         'focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-green-400',
-        parcial && 'ring-2 ring-emerald-300',
       )}
     >
-      <span aria-hidden className="text-3xl">
-        {item.icon}
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="block text-base font-semibold leading-tight text-gray-900">
+      <span className="flex w-full items-center gap-3">
+        <span aria-hidden className="text-4xl">
+          {item.icon}
+        </span>
+        <span className="min-w-0 flex-1 text-base font-semibold leading-tight text-gray-900">
           {item.name}
         </span>
-        {item.completionMode === 'cada_um' && (
-          <span className="mt-1 flex flex-wrap items-center gap-1.5">
-            {item.completions.map((marca) => (
-              <span
-                key={marca.memberId}
-                className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-800"
-              >
-                {marca.memberName} ✓
-              </span>
-            ))}
-            {faltam.map((membro) => (
-              <span
-                key={membro.id}
-                className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600"
-              >
-                {membro.name} —
-              </span>
-            ))}
+        <EtiquetaDePontos pontos={item.points} />
+      </span>
+
+      <span className="flex w-full items-center gap-2">
+        {membro && (
+          <span className="flex min-w-0 items-center gap-2">
+            <span aria-hidden className="text-3xl">
+              {membro.avatar}
+            </span>
+            <span className="truncate text-lg font-bold text-gray-800">{membro.name}</span>
           </span>
         )}
-      </span>
-      <EtiquetaDePontos pontos={item.points} />
-      <span
-        aria-hidden
-        className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-green-500 text-white shadow"
-      >
-        <Check className="h-6 w-6" />
+        <span
+          aria-hidden
+          className="ml-auto flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-green-500 text-white shadow-md"
+        >
+          <Check className="h-7 w-7" />
+        </span>
       </span>
     </button>
   )
@@ -645,40 +680,43 @@ function CartaoPendente({
  */
 function CartaoConcluido({
   item,
+  marca,
   aoDesfazer,
 }: {
   item: DayItem
-  aoDesfazer: (membroId?: string) => void
+  /** Presente quando o cartão é a marca de uma criança específica. */
+  marca?: DayItem['completions'][number]
+  aoDesfazer: () => void
 }) {
+  const hora = formatarHora(marca?.at ?? item.completions[0]?.at)
+  const quem = marca?.memberName ?? item.completions.map((c) => c.memberName).join(' e ')
+
   return (
-    <div className="relative flex min-h-[84px] items-center gap-4 rounded-2xl border-2 border-green-200 bg-gradient-to-br from-green-50 to-emerald-50 p-4 shadow-lg">
-      <span aria-hidden className="text-3xl">
-        {item.icon}
+    <div className="flex min-h-[128px] flex-col items-start gap-2 rounded-2xl border-2 border-green-200 bg-gradient-to-br from-green-50 to-emerald-50 p-4 shadow-lg">
+      <span className="flex w-full items-center gap-3">
+        <span aria-hidden className="text-4xl">
+          {item.icon}
+        </span>
+        <span className="min-w-0 flex-1 text-base font-semibold leading-tight text-gray-900">
+          {item.name}
+        </span>
+        <EtiquetaDePontos pontos={item.points} />
       </span>
-      <div className="min-w-0 flex-1">
-        <p className="text-base font-semibold leading-tight text-gray-900">{item.name}</p>
-        <ul className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
-          {item.completions.map((marca) => (
-            <li key={marca.memberId} className="text-xs text-gray-600">
-              <span className="font-semibold text-emerald-800">{marca.memberName}</span>
-              {formatarHora(marca.at) && ` às ${formatarHora(marca.at)}`}
-            </li>
-          ))}
-        </ul>
-      </div>
-      <EtiquetaDePontos pontos={item.points} />
-      <button
-        type="button"
-        onClick={() => aoDesfazer()}
-        aria-label={
-          item.completions.length > 1
-            ? `Desfazer ${item.name} para todos`
-            : `Desfazer ${item.name}`
-        }
-        className="flex h-[60px] w-[60px] shrink-0 items-center justify-center rounded-full bg-white text-gray-600 shadow transition-transform active:scale-90 active:bg-gray-100 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-emerald-400"
-      >
-        <Undo2 aria-hidden className="h-6 w-6" />
-      </button>
+
+      <span className="flex w-full items-center gap-2">
+        <span className="min-w-0">
+          <span className="block truncate text-lg font-bold text-emerald-800">{quem}</span>
+          {hora && <span className="block text-xs text-gray-500">às {hora}</span>}
+        </span>
+        <button
+          type="button"
+          onClick={aoDesfazer}
+          aria-label={`Desfazer ${item.name}${marca ? ` de ${marca.memberName}` : ''}`}
+          className="ml-auto flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-white text-gray-600 shadow transition-transform active:scale-90 active:bg-gray-100 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-emerald-400"
+        >
+          <Undo2 aria-hidden className="h-7 w-7" />
+        </button>
+      </span>
     </div>
   )
 }
