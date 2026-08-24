@@ -8,9 +8,11 @@
  * no FamilyDataProvider, então esta tela e o painel nunca mais operam em famílias
  * diferentes.
  *
- * Dois campos do domínio ganharam controle próprio aqui:
+ * Três campos do domínio ganharam controle próprio aqui:
  * - `audience` decide em qual aba do painel a tarefa aparece. Antes isso era
  *   deduzido de `points > 0` — um adulto com tarefa pontuada mudava de aba sozinho.
+ * - `completionMode` decide se cada pessoa do público marca a sua (e ganha os
+ *   pontos) ou se a tarefa sai da lista assim que alguém marcar.
  * - `daysOfWeek` só vale para recorrência semanal, e por isso só aparece nela.
  */
 
@@ -32,6 +34,7 @@ import { useAuthContext } from '@/providers/auth-provider'
 import {
   DataError,
   useFamilyData,
+  type CompletionMode,
   type Difficulty,
   type FamilyData,
   type MemberRole,
@@ -70,6 +73,34 @@ const CLASSE_AUDIENCIA: Record<MemberRole, string> = {
   adulto: 'bg-teal-100 text-teal-800',
 }
 
+const MODOS: CompletionMode[] = ['cada_um', 'basta_um']
+
+const ROTULO_MODO: Record<CompletionMode, string> = {
+  cada_um: '👥 Cada um faz a sua',
+  basta_um: '🙋 Basta um fazer',
+}
+
+/** Exemplo concreto, porque o rótulo sozinho ainda deixa dúvida. */
+const AJUDA_MODO: Record<CompletionMode, string> = {
+  cada_um: 'Todo mundo do público precisa marcar a sua, e cada um ganha os pontos. Ex.: escovar os dentes.',
+  basta_um: 'Sai da lista assim que a primeira pessoa marcar. Ex.: lavar a louça.',
+}
+
+const CLASSE_MODO: Record<CompletionMode, string> = {
+  cada_um: 'bg-indigo-100 text-indigo-800',
+  basta_um: 'bg-cyan-100 text-cyan-800',
+}
+
+/**
+ * O padrão que o resto do sistema usa: tarefa de criança é de cada um (cada uma
+ * marca a sua e pontua), tarefa de adulto basta um fazer. Só vale para tarefa
+ * NOVA — em edição, a escolha já gravada manda.
+ */
+const MODO_PADRAO_POR_AUDIENCIA: Record<MemberRole, CompletionMode> = {
+  crianca: 'cada_um',
+  adulto: 'basta_um',
+}
+
 const ROTULO_DIFICULDADE: Record<Difficulty, string> = {
   easy: 'Fácil',
   medium: 'Médio',
@@ -99,7 +130,8 @@ const TODOS_OS_DIAS = [0, 1, 2, 3, 4, 5, 6]
 // Formulário
 // ---------------------------------------------------------------------------
 
-type Filtro = 'todas' | MemberRole
+type FiltroAudiencia = 'todas' | MemberRole
+type FiltroModo = 'todos' | CompletionMode
 
 interface Formulario {
   /** `null` = criação; preenchido = edição. */
@@ -108,6 +140,7 @@ interface Formulario {
   icone: string
   pontos: string
   audience: MemberRole
+  modoConclusao: CompletionMode
   recorrencia: Recurrence
   diasSemana: number[]
   categoria: string
@@ -125,6 +158,7 @@ const FORM_INICIAL: Formulario = {
   icone: '📝',
   pontos: '10',
   audience: 'crianca',
+  modoConclusao: MODO_PADRAO_POR_AUDIENCIA.crianca,
   recorrencia: 'daily',
   diasSemana: TODOS_OS_DIAS,
   categoria: '',
@@ -139,6 +173,9 @@ function formularioDoTemplate(template: TaskTemplate): Formulario {
     icone: template.icon,
     pontos: String(template.points),
     audience: template.audience,
+    // O modo gravado manda, mesmo que fuja do padrão do público — é exatamente
+    // esse caso ("pôr a mesa" é de criança e basta um fazer) que se vem corrigir.
+    modoConclusao: template.completionMode,
     recorrencia: template.recurrence,
     diasSemana: template.daysOfWeek.length > 0 ? template.daysOfWeek : TODOS_OS_DIAS,
     categoria: template.category ?? '',
@@ -178,6 +215,7 @@ function paraEntrada(form: Formulario): NewTemplateInput {
     icon: form.icone,
     points: Number(form.pontos),
     audience: form.audience,
+    completionMode: form.modoConclusao,
     recurrence: form.recorrencia,
     // Comparação numérica explícita: `sort()` sem função converte para string,
     // e aí 10 viria antes de 2 se um dia a lista deixar de ser 0..6.
@@ -263,6 +301,18 @@ function useEditorTemplate(dados: FamilyData, recarregar: () => Promise<void>, a
   const atualizar: AtualizarForm = (campo, valor) =>
     setForm((atual) => ({ ...atual, [campo]: valor }))
 
+  /**
+   * Em tarefa NOVA o modo de conclusão acompanha o público, que é a regra padrão
+   * do sistema. Em EDIÇÃO nunca sobrescreve: a tarefa gravada pode fugir da regra
+   * de propósito, e trocar o público não é motivo para desfazer essa escolha.
+   */
+  const definirAudiencia = (audience: MemberRole) =>
+    setForm((atual) => ({
+      ...atual,
+      audience,
+      modoConclusao: atual.id === null ? MODO_PADRAO_POR_AUDIENCIA[audience] : atual.modoConclusao,
+    }))
+
   return {
     aberto,
     form,
@@ -270,6 +320,7 @@ function useEditorTemplate(dados: FamilyData, recarregar: () => Promise<void>, a
     erroSalvar,
     salvando,
     atualizar,
+    definirAudiencia,
     salvar,
     fechar: () => setAberto(false),
     abrirNovo: () => abrir(FORM_INICIAL),
@@ -308,7 +359,8 @@ export default function ManageTasksPage() {
   const autor = user?.email ?? user?.uid ?? 'painel'
   const editor = useEditorTemplate(dados, recarregar, autor)
   const alternarAtiva = useAlternarAtiva(dados, recarregar)
-  const [filtro, setFiltro] = useState<Filtro>('todas')
+  const [filtroAudiencia, setFiltroAudiencia] = useState<FiltroAudiencia>('todas')
+  const [filtroModo, setFiltroModo] = useState<FiltroModo>('todos')
 
   useEffect(() => {
     if (loading) return
@@ -320,8 +372,11 @@ export default function ManageTasksPage() {
   }, [loading, isAuthenticated, user, router, recarregar])
 
   const visiveis = useMemo(
-    () => templates.filter((t) => filtro === 'todas' || t.audience === filtro),
-    [templates, filtro],
+    () =>
+      templates
+        .filter((t) => filtroAudiencia === 'todas' || t.audience === filtroAudiencia)
+        .filter((t) => filtroModo === 'todos' || t.completionMode === filtroModo),
+    [templates, filtroAudiencia, filtroModo],
   )
 
   if (loading) return <TelaCarregando texto="Carregando..." />
@@ -330,7 +385,13 @@ export default function ManageTasksPage() {
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 p-4">
       <div className="max-w-7xl mx-auto">
         <Cabecalho onVoltar={() => router.push('/')} onNova={editor.abrirNovo} />
-        <BarraFiltro valor={filtro} onChange={setFiltro} templates={templates} />
+        <BarraFiltro
+          audiencia={filtroAudiencia}
+          modo={filtroModo}
+          onAudiencia={setFiltroAudiencia}
+          onModo={setFiltroModo}
+          templates={templates}
+        />
         <Aviso mensagem={erro ?? alternarAtiva.erro} />
         {carregando ? (
           <TelaCarregando texto="Carregando tarefas recorrentes..." />
@@ -393,23 +454,86 @@ function Cabecalho({ onVoltar, onNova }: { onVoltar: () => void; onNova: () => v
   )
 }
 
+/**
+ * Dois eixos independentes: público e modo de conclusão. Cada contagem já
+ * considera o outro filtro, senão o número prometeria cartões que não vão
+ * aparecer.
+ */
 function BarraFiltro({
-  valor,
-  onChange,
+  audiencia,
+  modo,
+  onAudiencia,
+  onModo,
   templates,
 }: {
-  valor: Filtro
-  onChange: (novo: Filtro) => void
+  audiencia: FiltroAudiencia
+  modo: FiltroModo
+  onAudiencia: (novo: FiltroAudiencia) => void
+  onModo: (novo: FiltroModo) => void
   templates: TaskTemplate[]
 }) {
-  const opcoes: { chave: Filtro; rotulo: string; total: number }[] = [
-    { chave: 'todas', rotulo: 'Todas', total: templates.length },
-    { chave: 'crianca', rotulo: ROTULO_AUDIENCIA.crianca, total: contar(templates, 'crianca') },
-    { chave: 'adulto', rotulo: ROTULO_AUDIENCIA.adulto, total: contar(templates, 'adulto') },
-  ]
+  const porModo = templates.filter((t) => modo === 'todos' || t.completionMode === modo)
+  const porAudiencia = templates.filter((t) => audiencia === 'todas' || t.audience === audiencia)
 
   return (
-    <div className="flex flex-wrap gap-2 mb-6" role="group" aria-label="Filtrar por público">
+    <div className="flex flex-col gap-3 mb-6">
+      <GrupoFiltro
+        rotulo="Público"
+        valor={audiencia}
+        onChange={onAudiencia}
+        classeAtiva="bg-blue-600 text-white border-blue-600"
+        opcoes={opcoesDeAudiencia(porModo)}
+      />
+      <GrupoFiltro
+        rotulo="Quem precisa fazer"
+        valor={modo}
+        onChange={onModo}
+        classeAtiva="bg-indigo-600 text-white border-indigo-600"
+        opcoes={opcoesDeModo(porAudiencia)}
+      />
+    </div>
+  )
+}
+
+interface OpcaoFiltro<T extends string> {
+  chave: T
+  rotulo: string
+  total: number
+}
+
+function opcoesDeAudiencia(templates: TaskTemplate[]): OpcaoFiltro<FiltroAudiencia>[] {
+  const contar = (audience: MemberRole) => templates.filter((t) => t.audience === audience).length
+  return [
+    { chave: 'todas', rotulo: 'Todas', total: templates.length },
+    { chave: 'crianca', rotulo: ROTULO_AUDIENCIA.crianca, total: contar('crianca') },
+    { chave: 'adulto', rotulo: ROTULO_AUDIENCIA.adulto, total: contar('adulto') },
+  ]
+}
+
+function opcoesDeModo(templates: TaskTemplate[]): OpcaoFiltro<FiltroModo>[] {
+  const contar = (modo: CompletionMode) => templates.filter((t) => t.completionMode === modo).length
+  return [
+    { chave: 'todos', rotulo: 'Todos', total: templates.length },
+    ...MODOS.map((modo) => ({ chave: modo, rotulo: ROTULO_MODO[modo], total: contar(modo) })),
+  ]
+}
+
+function GrupoFiltro<T extends string>({
+  rotulo,
+  valor,
+  onChange,
+  classeAtiva,
+  opcoes,
+}: {
+  rotulo: string
+  valor: T
+  onChange: (novo: T) => void
+  classeAtiva: string
+  opcoes: OpcaoFiltro<T>[]
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2" role="group" aria-label={`Filtrar por ${rotulo}`}>
+      <span className="text-sm font-semibold text-gray-600">{rotulo}:</span>
       {opcoes.map((opcao) => (
         <button
           key={opcao.chave}
@@ -417,10 +541,10 @@ function BarraFiltro({
           onClick={() => onChange(opcao.chave)}
           aria-pressed={valor === opcao.chave}
           className={cn(
-            'px-4 py-2 rounded-2xl text-sm font-semibold transition-colors',
+            'px-4 py-2 rounded-2xl border text-sm font-semibold transition-colors',
             valor === opcao.chave
-              ? 'bg-blue-600 text-white'
-              : 'bg-white text-gray-700 hover:bg-blue-50 border border-gray-200',
+              ? classeAtiva
+              : 'bg-white text-gray-700 hover:bg-gray-50 border-gray-200',
           )}
         >
           {opcao.rotulo} ({opcao.total})
@@ -428,10 +552,6 @@ function BarraFiltro({
       ))}
     </div>
   )
-}
-
-function contar(templates: TaskTemplate[], audience: MemberRole): number {
-  return templates.filter((t) => t.audience === audience).length
 }
 
 function ListaTemplates({
@@ -515,6 +635,13 @@ function EtiquetasTemplate({ template }: { template: TaskTemplate }) {
       <span className={cn('px-2 py-1 rounded-full text-xs font-semibold', CLASSE_RECORRENCIA[template.recurrence])}>
         {ROTULO_RECORRENCIA[template.recurrence]}
       </span>
+      {/* Revisar 17 tarefas migradas exige ver o modo de relance, não abrir cada uma. */}
+      <span
+        className={cn('px-2 py-1 rounded-full text-xs font-semibold', CLASSE_MODO[template.completionMode])}
+        title={AJUDA_MODO[template.completionMode]}
+      >
+        {ROTULO_MODO[template.completionMode]}
+      </span>
       {template.difficulty && (
         <span className={cn('px-2 py-1 rounded-full text-xs font-semibold', CLASSE_DIFICULDADE[template.difficulty])}>
           {ROTULO_DIFICULDADE[template.difficulty]}
@@ -594,7 +721,8 @@ function ModalTemplate({ editor }: { editor: Editor }) {
         </DialogHeader>
         <form onSubmit={enviar} className="space-y-5" noValidate>
           <CamposBasicos form={form} erros={erros} atualizar={atualizar} />
-          <CampoAudiencia valor={form.audience} atualizar={atualizar} />
+          <CampoAudiencia valor={form.audience} onChange={editor.definirAudiencia} />
+          <CampoModoConclusao valor={form.modoConclusao} atualizar={atualizar} />
           <CamposRecorrencia form={form} erros={erros} atualizar={atualizar} />
           <CamposOpcionais form={form} erros={erros} atualizar={atualizar} />
           <Aviso mensagem={erroSalvar} />
@@ -710,7 +838,13 @@ function SeletorEmoji({ valor, atualizar }: { valor: string; atualizar: Atualiza
  * `audience` é campo próprio — não se deduz mais dos pontos. É ele que decide
  * em qual aba do painel a tarefa aparece.
  */
-function CampoAudiencia({ valor, atualizar }: { valor: MemberRole; atualizar: AtualizarForm }) {
+function CampoAudiencia({
+  valor,
+  onChange,
+}: {
+  valor: MemberRole
+  onChange: (novo: MemberRole) => void
+}) {
   return (
     <div className="space-y-2">
       <Label id="rotulo-audiencia">👨‍👩‍👧 Aparece na aba de</Label>
@@ -720,7 +854,7 @@ function CampoAudiencia({ valor, atualizar }: { valor: MemberRole; atualizar: At
             key={opcao}
             type="button"
             aria-pressed={valor === opcao}
-            onClick={() => atualizar('audience', opcao)}
+            onClick={() => onChange(opcao)}
             className={cn(
               'px-4 py-3 rounded-xl text-sm font-semibold border transition-colors',
               valor === opcao
@@ -733,6 +867,69 @@ function CampoAudiencia({ valor, atualizar }: { valor: MemberRole; atualizar: At
         ))}
       </div>
     </div>
+  )
+}
+
+/**
+ * `completionMode` é independente do público — "pôr a mesa" é de criança e basta
+ * um fazer. A ajuda fica dentro do botão porque a diferença entre os dois modos é
+ * exatamente o que o rótulo sozinho não entrega.
+ */
+function CampoModoConclusao({
+  valor,
+  atualizar,
+}: {
+  valor: CompletionMode
+  atualizar: AtualizarForm
+}) {
+  return (
+    <div className="space-y-2">
+      <Label id="rotulo-modo">✅ Quem precisa fazer</Label>
+      <div role="group" aria-labelledby="rotulo-modo" className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {MODOS.map((opcao) => (
+          <BotaoModo
+            key={opcao}
+            modo={opcao}
+            ativo={valor === opcao}
+            onSelecionar={() => atualizar('modoConclusao', opcao)}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function BotaoModo({
+  modo,
+  ativo,
+  onSelecionar,
+}: {
+  modo: CompletionMode
+  ativo: boolean
+  onSelecionar: () => void
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={ROTULO_MODO[modo]}
+      aria-pressed={ativo}
+      aria-describedby={`ajuda-modo-${modo}`}
+      onClick={onSelecionar}
+      className={cn(
+        'px-4 py-3 rounded-xl text-left text-sm font-semibold border transition-colors',
+        ativo
+          ? 'bg-indigo-600 text-white border-indigo-600'
+          : 'bg-white text-gray-700 border-gray-300 hover:bg-indigo-50',
+      )}
+    >
+      {ROTULO_MODO[modo]}
+      <span
+        id={`ajuda-modo-${modo}`}
+        className={cn('block mt-1 text-xs font-normal', ativo ? 'text-indigo-100' : 'text-gray-600')}
+      >
+        {AJUDA_MODO[modo]}
+      </span>
+    </button>
   )
 }
 
