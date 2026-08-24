@@ -41,7 +41,15 @@ export interface ItemCompletion {
 export interface Member {
   id: string
   name: string
+  /** Emoji. Continua sendo a reserva quando não há foto. */
   avatar: string
+  /**
+   * Foto do membro como data URI, já cortada em quadrado e reduzida no
+   * navegador antes de salvar. Vai embutida no documento de propósito: no
+   * tamanho de avatar são ~20 KB, e assim ela chega junto com o nome e o
+   * placar, sem serviço novo, sem regra nova e sem uma segunda requisição.
+   */
+  photo?: string
   role: MemberRole
   /** Chave de tema resolvida para classes pela UI — nunca cor hardcoded. */
   colorKey: string

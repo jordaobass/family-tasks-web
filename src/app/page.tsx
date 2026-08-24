@@ -550,9 +550,7 @@ function BotaoDeMembro({
         selecionado ? 'scale-105 border-yellow-300 ring-4 ring-yellow-300' : 'border-white/40 opacity-90',
       )}
     >
-      <span aria-hidden className="text-3xl">
-        {membro.avatar}
-      </span>
+      <Retrato membro={membro} tamanho="h-12 w-12" className="border-2 border-white/70" />
       <span className="text-lg">{membro.name}</span>
       {membro.role === 'crianca' && (
         <span className="rounded-full bg-black/25 px-2 py-0.5 text-sm font-semibold">
@@ -656,9 +654,7 @@ function CartaoPendente({
       <span className="flex w-full items-center gap-2">
         {membro && (
           <span className="flex min-w-0 items-center gap-2">
-            <span aria-hidden className="text-3xl">
-              {membro.avatar}
-            </span>
+            <Retrato membro={membro} tamanho="h-11 w-11" />
             <span className="truncate text-lg font-bold text-gray-800">{membro.name}</span>
           </span>
         )}
@@ -718,6 +714,48 @@ function CartaoConcluido({
         </button>
       </span>
     </div>
+  )
+}
+
+/**
+ * Foto quando existe, emoji quando não. Para a criança que ainda não lê, a
+ * própria cara é o identificador mais forte que existe — mais que qualquer
+ * emoji ou nome escrito.
+ *
+ * `<img>` e não `next/image` de propósito: a foto é um data URI embutido no
+ * documento do membro, e o otimizador do Next não processa data URI.
+ */
+function Retrato({
+  membro,
+  tamanho,
+  className,
+}: {
+  membro: Pick<Member, 'name' | 'avatar' | 'photo'>
+  /** Classe de tamanho, ex.: `h-16 w-16`. */
+  tamanho: string
+  className?: string
+}) {
+  if (membro.photo) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={membro.photo}
+        alt={membro.name}
+        className={cn(tamanho, 'shrink-0 rounded-full object-cover shadow-sm', className)}
+      />
+    )
+  }
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        tamanho,
+        'flex shrink-0 items-center justify-center rounded-full bg-gray-100 text-[2em] leading-none',
+        className,
+      )}
+    >
+      {membro.avatar}
+    </span>
   )
 }
 
@@ -893,7 +931,9 @@ function ModalQuemFez({
           </DialogDescription>
         </DialogHeader>
 
-        <ul className="grid gap-2">
+        {/* Quadrados lado a lado: a criança reconhece a própria cara, não lê o
+            nome. Alvo grande porque quem toca aqui tem dedo pequeno. */}
+        <ul className="grid grid-cols-2 gap-3">
           {candidatos.map((membro) => {
             const marca = jaMarcou.get(membro.id)
             const escolhido = escolhidos.includes(membro.id)
@@ -905,37 +945,39 @@ function ModalQuemFez({
                   aria-pressed={escolhido}
                   onClick={() => alternar(membro.id)}
                   className={cn(
-                    'flex min-h-[64px] w-full items-center gap-3 rounded-2xl border-2 p-3 text-left transition-colors',
+                    'flex aspect-square w-full flex-col items-center justify-center gap-2 rounded-2xl border-4 p-3 transition-colors',
                     'focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-purple-300',
-                    marca && 'cursor-not-allowed border-emerald-200 bg-emerald-50 opacity-80',
+                    marca && 'cursor-not-allowed border-emerald-300 bg-emerald-50',
                     !marca && escolhido && 'border-purple-500 bg-purple-50',
                     !marca && !escolhido && 'border-gray-200 bg-white active:bg-gray-50',
                   )}
                 >
-                  <span aria-hidden className="text-3xl">
-                    {membro.avatar}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-base font-bold text-gray-900">{membro.name}</span>
-                    {marca && (
-                      <span className="block text-xs font-medium text-emerald-700">
-                        já marcou{formatarHora(marca.at) ? ` às ${formatarHora(marca.at)}` : ''}
+                  <span className="relative">
+                    <Retrato
+                      membro={membro}
+                      tamanho="h-24 w-24"
+                      className={cn(marca && 'opacity-60')}
+                    />
+                    {(marca || escolhido) && (
+                      <span
+                        aria-hidden
+                        className={cn(
+                          'absolute -bottom-1 -right-1 flex h-9 w-9 items-center justify-center rounded-full text-white shadow-md',
+                          marca ? 'bg-emerald-600' : 'bg-purple-600',
+                        )}
+                      >
+                        <Check className="h-5 w-5" />
                       </span>
                     )}
                   </span>
-                  {marca ? (
-                    <Check aria-hidden className="h-6 w-6 shrink-0 text-emerald-600" />
-                  ) : (
-                    <span
-                      aria-hidden
-                      className={cn(
-                        'flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2',
-                        escolhido ? 'border-purple-500 bg-purple-500 text-white' : 'border-gray-300',
-                      )}
-                    >
-                      {escolhido && <Check className="h-4 w-4" />}
-                    </span>
-                  )}
+                  <span className="text-center leading-tight">
+                    <span className="block text-lg font-bold text-gray-900">{membro.name}</span>
+                    {marca && (
+                      <span className="block text-xs font-medium text-emerald-700">
+                        já fez{formatarHora(marca.at) ? ` às ${formatarHora(marca.at)}` : ''}
+                      </span>
+                    )}
+                  </span>
                 </button>
               </li>
             )

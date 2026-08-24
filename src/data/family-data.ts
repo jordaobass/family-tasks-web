@@ -78,9 +78,12 @@ export interface FamilyData {
     onData: (members: Member[]) => void,
     onError?: (err: DataError) => void,
   ): Unsubscribe
+  /** `photo: null` remove a foto; `undefined` deixa a atual como está. */
   updateMember(
     id: string,
-    patch: Partial<Pick<Member, 'name' | 'avatar' | 'colorKey' | 'active' | 'sortOrder'>>,
+    patch: Partial<Pick<Member, 'name' | 'avatar' | 'colorKey' | 'active' | 'sortOrder'>> & {
+      photo?: string | null
+    },
   ): Promise<void>
 
   // ---- histórico / estatísticas ----

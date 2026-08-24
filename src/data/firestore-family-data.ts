@@ -12,6 +12,7 @@
 
 import {
   collection,
+  deleteField,
   doc,
   getDoc,
   getDocs,
@@ -168,7 +169,11 @@ function paraItem(bruto: DocumentData): DayItem {
   // converte-se na leitura, para o histórico já gravado não se perder.
   const marcas = lerMarcas(bruto, pontos)
 
-  const modo: CompletionMode = bruto.completion_mode === 'cada_um' ? 'cada_um' : 'basta_um'
+  // MESMO default do template (`lerModo`): item gravado antes deste campo
+  // existir precisa cair na regra da casa — criança faz a sua, adulto basta um.
+  // Defaults diferentes entre item e template faziam todo dia já gerado
+  // aparecer como um cartão só, com modal, em vez de um cartão por criança.
+  const modo = lerModo(bruto, pontos)
   const esperados: string[] = Array.isArray(bruto.expected_member_ids) ? bruto.expected_member_ids : []
 
   return {
@@ -226,6 +231,7 @@ function paraMembro(id: string, bruto: DocumentData): Member {
     id,
     name: String(bruto.name ?? id),
     avatar: String(bruto.avatar ?? '🙂'),
+    photo: typeof bruto.photo === 'string' && bruto.photo ? bruto.photo : undefined,
     role: bruto.role === 'crianca' ? 'crianca' : 'adulto',
     colorKey: String(bruto.color_key ?? id),
     pointsTotal: Number(bruto.points_total ?? 0),
@@ -762,14 +768,18 @@ class FirestoreFamilyData implements FamilyData {
 
   async updateMember(
     id: string,
-    patch: Partial<Pick<Member, 'name' | 'avatar' | 'colorKey' | 'active' | 'sortOrder'>>,
+    patch: Partial<Pick<Member, 'name' | 'avatar' | 'photo' | 'colorKey' | 'active' | 'sortOrder'>>,
   ): Promise<void> {
     await comErro('Não foi possível atualizar o membro', async () => {
+      // `photo: null` no patch apaga a foto; `undefined` deixa como está.
+      // Sem essa distinção seria impossível remover uma foto já salva.
+      const apagarFoto = patch.photo === null
       await updateDoc(
         this.refMembro(id),
         semUndefined({
           name: patch.name,
           avatar: patch.avatar,
+          photo: apagarFoto ? deleteField() : patch.photo,
           color_key: patch.colorKey,
           active: patch.active,
           sort_order: patch.sortOrder,
