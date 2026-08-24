@@ -80,8 +80,11 @@ tarefas divide espaço com os outros módulos desde o começo**, não ocupa a te
 amarrar identidade visual ao nome atual; antes de vender para famílias desconhecidas, o nome
 precisa de um exercício próprio.
 
-Nenhuma outra restrição de marca foi declarada: sem paleta obrigatória, sem tipografia
-herdada, sem logo existente. O visual atual do app é evidência do que existe, não compromisso.
+**O mundo visual atual do app é compromisso de marca** (decidido em 23/08/2026). O dono viu
+duas direções alternativas construídas e preferiu, sem hesitar, a linguagem que ele mesmo
+criou: fundo em gradiente índigo→roxo, cartões brancos de cantos generosos, avatares e ícones
+em emoji, estrela com número como moeda, e celebração ao concluir. Trabalho futuro **preserva
+e refina esse mundo** — não o substitui. Redesenho só volta à mesa se ele pedir.
 
 ## Evidence on Hand
 
